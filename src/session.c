@@ -138,7 +138,7 @@ void session_free(struct session *sess)
 	vars_prune_per_sess(&sess->vars);
 	conn = objt_conn(sess->origin);
 	if (conn != NULL && conn->mux)
-		conn->mux->destroy(conn->ctx);
+		CALL_MUX_NO_RET(conn->mux, destroy(conn->ctx));
 
 	HA_SPIN_LOCK(IDLE_CONNS_LOCK, &idle_conns[tid].idle_conns_lock);
 	list_for_each_entry_safe(pconns, pconns_back, &sess->priv_conns, sess_el) {
@@ -240,6 +240,9 @@ int session_accept_fd(struct connection *cli_conn)
 		/* wait for a NetScaler client IP insertion protocol header */
 		if (l->bind_conf->options & BC_O_ACC_CIP)
 			cli_conn->flags |= CO_FL_ACCEPT_CIP;
+
+		if (l->bind_conf->mux_proto && isteq(l->bind_conf->mux_proto->token, ist("qmux")))
+			cli_conn->flags |= (CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND);
 
 		/* Add the handshake pseudo-XPRT */
 		if (cli_conn->flags & (CO_FL_ACCEPT_PROXY | CO_FL_ACCEPT_CIP)) {

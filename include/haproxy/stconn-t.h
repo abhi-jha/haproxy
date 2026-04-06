@@ -73,7 +73,9 @@ enum se_flags {
 	SE_FL_DETACHED   = 0x00000010, /* The endpoint is detached (no mux/no applet) */
 	SE_FL_ORPHAN     = 0x00000020, /* The endpoint is orphan (no stream connector) */
 
-	 /* unused: 0x00000040 .. 0x00000080 */
+	SE_FL_APP_STARTED= 0x00000040, /* the application layer has really started */
+
+	/* unused: 0x00000080 */
 
 	SE_FL_SHRD       = 0x00000100,  /* read shut, draining extra data */
 	SE_FL_SHRR       = 0x00000200,  /* read shut, resetting extra data */
@@ -135,12 +137,12 @@ static forceinline char *se_show_flags(char *buf, size_t len, const char *delim,
 	_(0);
 	/* flags */
 	_(SE_FL_T_MUX, _(SE_FL_T_APPLET, _(SE_FL_DETACHED, _(SE_FL_ORPHAN,
-	_(SE_FL_SHRD, _(SE_FL_SHRR, _(SE_FL_SHWN, _(SE_FL_SHWS,
+	_(SE_FL_APP_STARTED, _(SE_FL_SHRD, _(SE_FL_SHRR, _(SE_FL_SHWN, _(SE_FL_SHWS,
 	_(SE_FL_NOT_FIRST, _(SE_FL_WEBSOCKET, _(SE_FL_EOI, _(SE_FL_EOS,
 	_(SE_FL_ERROR, _(SE_FL_ERR_PENDING,  _(SE_FL_RCV_MORE,
 	_(SE_FL_WANT_ROOM, _(SE_FL_EXP_NO_DATA, _(SE_FL_MAY_FASTFWD_PROD, _(SE_FL_MAY_FASTFWD_CONS,
 	_(SE_FL_WAIT_FOR_HS, _(SE_FL_KILL_CONN, _(SE_FL_WAIT_DATA,
-	_(SE_FL_WONT_CONSUME, _(SE_FL_HAVE_NO_DATA, _(SE_FL_APPLET_NEED_CONN)))))))))))))))))))))))));
+	_(SE_FL_WONT_CONSUME, _(SE_FL_HAVE_NO_DATA, _(SE_FL_APPLET_NEED_CONN))))))))))))))))))))))))));
 	/* epilogue */
 	_(~0U);
 	return buf;
@@ -349,19 +351,6 @@ struct sedesc {
 	unsigned long long kop;    /* Known outgoing payload length (see above) */
 };
 
-/* sc_app_ops describes the application layer's operations and notification
- * callbacks when I/O activity is reported and to use to perform shutr/shutw.
- * There are very few combinations in practice (strm/chk <-> none/mux/applet).
- */
-struct sc_app_ops {
-	void (*chk_rcv)(struct stconn *);    /* chk_rcv function, may not be null */
-	void (*chk_snd)(struct stconn *);    /* chk_snd function, may not be null */
-	void (*abort)(struct stconn *);      /* abort function, may not be null */
-	void (*shutdown)(struct stconn *);   /* shutdown function, may not be null */
-	int  (*wake)(struct stconn *);       /* data-layer callback to report activity */
-	char name[8];                        /* data layer name, zero-terminated */
-};
-
 /*
  * This structure describes the elements of a connection relevant to a stream
  */
@@ -383,7 +372,6 @@ struct stconn {
 	struct wait_event wait_event;        /* We're in a wait list */
 	struct sedesc *sedesc;               /* points to the stream endpoint descriptor */
 	enum obj_type *app;                  /* points to the applicative point (stream or check) */
-	const struct sc_app_ops *app_ops;    /* general operations used at the app layer */
 	struct sockaddr_storage *src;        /* source address (pool), when known, otherwise NULL */
 	struct sockaddr_storage *dst;        /* destination address (pool), when known, otherwise NULL */
 };

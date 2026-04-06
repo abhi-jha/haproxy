@@ -26,6 +26,9 @@
 
 #include <haproxy/counters-t.h>
 #include <haproxy/guid-t.h>
+#include <haproxy/global.h>
+
+extern THREAD_LOCAL void *trash_counters;
 
 int counters_fe_shared_prepare(struct fe_counters_shared *counters, const struct guid_node *guid, char **errmsg);
 int counters_be_shared_prepare(struct be_counters_shared *counters, const struct guid_node *guid, char **errmsg);
@@ -100,5 +103,107 @@ void counters_be_shared_drop(struct be_counters_shared *counters);
 		__ret += rfunc(&scounters[it]->elem, arg1, arg2);             \
 	__ret;                                                                \
 })
+
+#define COUNTERS_UPDATE_MAX(counter, count)                                   \
+	do {                                                                  \
+		if (!(global.tune.options & GTUNE_NO_MAX_COUNTER))            \
+			HA_ATOMIC_UPDATE_MAX(counter, count);                 \
+	} while (0)
+
+/* Manipulation of extra_counters, for boot-time registrable modules */
+/* retrieve the base storage of extra counters (first tgroup if any) */
+#define EXTRA_COUNTERS_BASE(counters, mod) \
+	(likely(counters) ? \
+		((void *)(*(counters)->datap + (mod)->counters_off[(counters)->type])) : \
+		(trash_counters))
+
+/* retrieve the pointer to the extra counters storage for module <mod> for the
+ * current TGID.
+ */
+#define EXTRA_COUNTERS_GET(counters, mod) \
+	(likely(counters) ? \
+		((void *)(counters)->datap[(counters)->tgrp_step * (tgid - 1)] +    \
+	         (mod)->counters_off[(counters)->type]) : \
+		(trash_counters))
+
+#define EXTRA_COUNTERS_REGISTER(counters, ctype, alloc_failed_label, storage, step) \
+	do {                                                         \
+		typeof(*counters) _ctr;                              \
+		_ctr = calloc(1, sizeof(*_ctr));                     \
+		if (!_ctr)                                           \
+			goto alloc_failed_label;                     \
+		_ctr->type = (ctype);                                \
+		_ctr->tgrp_step = (step);                            \
+		_ctr->datap = (storage);                             \
+		*(counters) = _ctr;                                  \
+	} while (0)
+
+#define EXTRA_COUNTERS_ADD(mod, counters, new_counters, csize) \
+	do {                                                   \
+		typeof(counters) _ctr = (counters);            \
+		(mod)->counters_off[_ctr->type] = _ctr->size;  \
+		_ctr->size += (csize);                         \
+	} while (0)
+
+#define EXTRA_COUNTERS_ALLOC(counters, alloc_failed_label, nbtg)	\
+	do {                                                   \
+		typeof(counters) _ctr = (counters);            \
+		char **datap = _ctr->datap;                    \
+		uint tgrp;                                     \
+		_ctr->nbtgrp = _ctr->tgrp_step ? (nbtg) : 1;   \
+		for (tgrp = 0; tgrp < _ctr->nbtgrp; tgrp++) {  \
+			*datap = malloc((_ctr)->size);         \
+			if (!*_ctr->datap)                     \
+				goto alloc_failed_label;       \
+			datap += _ctr->tgrp_step;              \
+		}                                              \
+	} while (0)
+
+#define EXTRA_COUNTERS_INIT(counters, mod, init_counters, init_counters_size) \
+	do {                                                                  \
+		typeof(counters) _ctr = (counters);                    \
+		char **datap = _ctr->datap;                            \
+		uint tgrp;                                             \
+		for (tgrp = 0; tgrp < _ctr->nbtgrp; tgrp++) {          \
+			memcpy(*datap + mod->counters_off[_ctr->type], \
+			       (init_counters), (init_counters_size)); \
+			datap += _ctr->tgrp_step;                      \
+		}                                                      \
+	} while (0)
+
+#define EXTRA_COUNTERS_FREE(counters)                                  \
+	do {                                                           \
+		typeof(counters) _ctr = (counters);                    \
+		if (_ctr) {                                            \
+			char **datap = _ctr->datap;                    \
+			uint tgrp;                                     \
+			for (tgrp = 0; tgrp < _ctr->nbtgrp; tgrp++) {  \
+				ha_free(datap);                        \
+				datap += _ctr->tgrp_step;              \
+			}                                              \
+			free(_ctr);                                    \
+		}                                                      \
+	} while (0)
+
+/* aggregate all values of <metricp> over the thread groups handled by
+ * <counters>. <metricp> MUST correspond to an entry of the first tgrp of
+ * <counters>. The number of groups and the step are found in <counters>. The
+ * type of the return value is the same as <metricp>, and must be a scalar so
+ * that values are summed before being returned.
+ */
+#define EXTRA_COUNTERS_AGGR(counters, metricp)                         \
+	({                                                             \
+		typeof(counters) _ctr = (counters);                    \
+		typeof(metricp) *valp, _ret = 0;                       \
+		if (_ctr) {                                            \
+			size_t ofs = (char *)&metricp - _ctr->datap[0]; \
+			uint tgrp;                                     \
+			for (tgrp = 0; tgrp < _ctr->nbtgrp; tgrp++) {  \
+				valp = (typeof(valp))(_ctr->datap[tgrp * (counters)->tgrp_step] + ofs); \
+				_ret += HA_ATOMIC_LOAD(valp);          \
+			}                                              \
+		}                                                      \
+		_ret;                                                  \
+	})
 
 #endif /* _HAPROXY_COUNTERS_H */

@@ -232,7 +232,7 @@ int cfg_eval_cond_term(const struct cfg_cond_term *term, char **err)
 			const char *p;
 
 			ret = 0; // assume feature not found
-			for (p = build_features; (p = strstr(p, term->args[0].data.str.area)); p++) {
+			for (p = build_features; *p && (p = strstr(p, term->args[0].data.str.area)); p++) {
 				if (p > build_features &&
 				    (p[term->args[0].data.str.data] == ' ' ||
 				     p[term->args[0].data.str.data] == 0)) {
@@ -272,8 +272,10 @@ int cfg_eval_cond_term(const struct cfg_cond_term *term, char **err)
 		case CFG_PRED_OSSL_VERSION_ATLEAST: { // checks if the current openssl version is at least this one
 			int opensslret = openssl_compare_current_version(term->args[0].data.str.area);
 
-			if (opensslret < -1) /* can't parse the string or no openssl available */
+			if (opensslret < -1) { /* can't parse the string or no openssl available */
+				memprintf(err, "invalid argument to conditional expression predicate '%s': '%s'", term->pred->word, term->args[0].data.str.area);
 				ret = -1;
+			}
 			else
 				ret = opensslret <= 0;
 			break;
@@ -281,8 +283,10 @@ int cfg_eval_cond_term(const struct cfg_cond_term *term, char **err)
 		case CFG_PRED_OSSL_VERSION_BEFORE: { // checks if the current openssl version is older than this one
 			int opensslret = openssl_compare_current_version(term->args[0].data.str.area);
 
-			if (opensslret < -1) /* can't parse the string or no openssl available */
+			if (opensslret < -1) { /* can't parse the string or no openssl available */
+				memprintf(err, "invalid argument to conditional expression predicate '%s': '%s'", term->pred->word, term->args[0].data.str.area);
 				ret = -1;
+			}
 			else
 				ret = opensslret > 0;
 			break;
@@ -290,8 +294,10 @@ int cfg_eval_cond_term(const struct cfg_cond_term *term, char **err)
 		case CFG_PRED_AWSLC_API_ATLEAST: { // checks if the current AWSLC API is at least this one
 			int awslcret = awslc_compare_current_api(term->args[0].data.str.area);
 
-			if (awslcret < -1) /* can't parse the string or no AWS-LC available */
+			if (awslcret < -1) { /* can't parse the string or no AWS-LC available */
+				memprintf(err, "invalid argument to conditional expression predicate '%s': '%s'", term->pred->word, term->args[0].data.str.area);
 				ret = -1;
+			}
 			else
 				ret = awslcret <= 0;
 			break;
@@ -299,8 +305,10 @@ int cfg_eval_cond_term(const struct cfg_cond_term *term, char **err)
 		case CFG_PRED_AWSLC_API_BEFORE: { // checks if the current AWSLC API is older than this one
 			int awslcret = awslc_compare_current_api(term->args[0].data.str.area);
 
-			if (awslcret < -1) /* can't parse the string or no AWS-LC available */
+			if (awslcret < -1) { /* can't parse the string or no AWS-LC available */
+				memprintf(err, "invalid argument to conditional expression predicate '%s': '%s'", term->pred->word, term->args[0].data.str.area);
 				ret = -1;
+			}
 			else
 				ret = awslcret > 0;
 			break;
@@ -564,6 +572,8 @@ int cfg_eval_condition(char **args, char **err, const char **errptr)
 		}
 
 		ret = cfg_eval_cond_expr(expr, err);
+		if (ret < 0)
+			goto fail;
 		goto done;
 	}
 

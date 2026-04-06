@@ -289,7 +289,7 @@ void stats_dump_html_info(struct stconn *sc)
 	              "<td align=\"left\" valign=\"top\" nowrap width=\"1%%\">"
 	              "<b>Display option:</b><ul style=\"margin-top: 0.25em;\">"
 	              "",
-	              (ctx->flags & STAT_F_HIDEVER) ? "" : (stats_version_string),
+	              (ctx->flags & STAT_F_SHOWVER) ? (stats_version_string) : "",
 	              pid, (ctx->flags & STAT_F_SHNODE) ? " on " : "",
 		      (ctx->flags & STAT_F_SHNODE) ? (uri->node ? uri->node : global.node) : "",
 	              (ctx->flags & STAT_F_SHDESC) ? ": " : "",
@@ -2116,6 +2116,8 @@ static size_t http_stats_fastfwd(struct appctx *appctx, struct buffer *buf,
 static void http_stats_release(struct appctx *appctx)
 {
 	struct show_stat_ctx *ctx = appctx->svcctx;
+	if (ctx->domain == STATS_DOMAIN_PROXY && ctx->obj1)
+		watcher_detach(&ctx->px_watch);
 	if (ctx->px_st == STAT_PX_ST_SV && ctx->obj2)
 		watcher_detach(&ctx->srv_watch);
 }

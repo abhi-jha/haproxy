@@ -1731,7 +1731,7 @@ add backend <name> from <defproxy> [mode <mode>] [guid <guid>] [ EXPERIMENTAL ]
   Only TCP or HTTP proxies can be created. All of the settings are inherited
   from <defproxy> default proxy instance. By default, it is mandatory to
   specify the backend mode via the argument of the same name, unless <defproxy>
-  already defines it explicitely. It is also possible to use an optional GUID
+  already defines it explicitly. It is also possible to use an optional GUID
   argument if wanted.
 
   Servers can be added via the command "add server". The backend is initialized
@@ -1740,10 +1740,7 @@ add backend <name> from <defproxy> [mode <mode>] [guid <guid>] [ EXPERIMENTAL ]
 
   All named default proxies can be used, given that they validate the same
   inheritance rules applied during configuration parsing. There is some
-  exceptions though, for example when the mode is neither TCP nor HTTP. Another
-  exception is that it is not yet possible to use a default proxies which
-  reference custom HTTP errors, for example via the errorfiles or http-rules
-  keywords.
+  exceptions though, for example when the mode is neither TCP nor HTTP.
 
   This command is restricted and can only be issued on sockets configured for
   level "admin". Moreover, this feature is still considered in development so it
@@ -2123,6 +2120,30 @@ del acl <acl> [<key>|#<ref>]
   this command delete only the listed reference. The reference can be found with
   listing the content of the acl. Note that if the reference <acl> is a name and
   is shared with a map, the entry will be also deleted in the map.
+
+del backend <name>
+  Removes the backend proxy with the name <name>.
+
+  This operation is only possible for TCP or HTTP proxies. To succeed, the
+  backend instance must have been first unpublished. Also, all of its servers
+  must first be removed (via "del server" CLI). Finally, no stream must still
+  be attached to the backend instance.
+
+  There is additional restrictions which prevent backend removal. First, a
+  backend cannot be removed if it is explicitly referenced by config elements,
+  for example via a use_backend rule or in sample expressions. Some proxies
+  options are also incompatible with runtime deletion. Currently, this is the
+  case when deprecated dispatch or option transparent are used. Also, a backend
+  cannot be removed if there is a stick-table declared in it. Finally, it is
+  impossible for now to remove a backend if QUIC servers were present in it.
+
+  It can be useful to use "wait be-removable" prior to this command to check
+  for the aforementioned requisites. This also provides a method to wait for
+  the final closure of the streams attached to the target backend.
+
+  This command is restricted and can only be issued on sockets configured for
+  level "admin". Moreover, this feature is still considered in development so it
+  also requires experimental mode (see "experimental-mode on").
 
 del map <map> [<key>|#<ref>]
   Delete all the map entries from the map <map> corresponding to the key <key>.
@@ -3335,7 +3356,7 @@ show pools [byname|bysize|byusage] [detailed] [match <pfx>] [<nb>]
       - Pool quic_conn_c (152 bytes) : 1337 allocated (203224 bytes), ...
     Total: 15 pools, 109578176 bytes allocated, 109578176 used ...
 
-show profiling [{all | status | tasks | memory}] [byaddr|bytime|aggr|<max_lines>]*
+show profiling [{all | status | tasks | memory}] [byaddr|bytime|byctx|aggr|<max_lines>]*
   Dumps the current profiling settings, one per line, as well as the command
   needed to change them. When tasks profiling is enabled, some per-function
   statistics collected by the scheduler will also be emitted, with a summary
@@ -3344,14 +3365,15 @@ show profiling [{all | status | tasks | memory}] [byaddr|bytime|aggr|<max_lines>
   allocations/releases and their sizes will be reported. It is possible to
   limit the dump to only the profiling status, the tasks, or the memory
   profiling by specifying the respective keywords; by default all profiling
-  information are dumped. It is also possible to limit the number of lines
+  information are dumped. It is also possible to limit the number of lines of
   of output of each category by specifying a numeric limit. If is possible to
-  request that the output is sorted by address or by total execution time
-  instead of usage, e.g. to ease comparisons between subsequent calls or to
-  check what needs to be optimized, and to aggregate task activity by called
-  function instead of seeing the details. Please note that profiling is
-  essentially aimed at developers since it gives hints about where CPU cycles
-  or memory are wasted in the code. There is nothing useful to monitor there.
+  request that the output is sorted by address, by total execution time, or by
+  calling context instead of usage, e.g. to ease comparisons between subsequent
+  calls or to check what needs to be optimized, and to aggregate task activity
+  by called function instead of seeing the details. Please note that profiling
+  is essentially aimed at developers since it gives hints about where CPU
+  cycles or memory are wasted in the code. There is nothing useful to monitor
+  there.
 
 show resolvers [<resolvers section id>]
   Dump statistics for the given resolvers section, or all resolvers sections
@@ -4525,6 +4547,13 @@ wait { -h | <delay> } [<condition> [<args>...]]
   With a condition and optional arguments, the command will wait for the
   specified condition to be satisfied, to unrecoverably fail, or to remain
   unsatisfied for the whole <delay> duration. The supported conditions are:
+
+  - be-removable <proxy> : this will wait for the specified proxy backend to be
+    removable by the "del backend" command. Some conditions will never be
+    accepted (e.g. backend not yet unpublished or with servers in it) and will
+    cause the report of a specific error message indicating what condition is
+    not met. If everything is OK before the delay, a success is returned and
+    the operation is terminated.
 
   - srv-removable <proxy>/<server> : this will wait for the specified server to
     be removable by the "del server" command, i.e. be in maintenance and no

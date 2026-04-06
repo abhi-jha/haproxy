@@ -1396,7 +1396,7 @@ check_tgid:
 			tree = search_tree ? &srv->per_thr[i].safe_conns : &srv->per_thr[i].idle_conns;
 			conn = srv_lookup_conn(tree, hash);
 			while (conn) {
-				if (conn->mux->takeover && conn->mux->takeover(conn, i, 0) == 0) {
+				if (conn->mux->takeover && CALL_MUX_WITH_RET(conn->mux, takeover(conn, i, 0)) == 0) {
 					conn_delete_from_tree(conn, i);
 					_HA_ATOMIC_INC(&activity[tid].fd_takeover);
 					found = 1;
@@ -1498,7 +1498,7 @@ takeover_random_idle_conn(struct ceb_root **root, int curtid)
 
 	conn = ceb64_item_first(root, hash_node.node, hash_node.key, struct connection);
 	while (conn) {
-		if (conn->mux->takeover && conn->mux->takeover(conn, curtid, 1) == 0) {
+		if (conn->mux->takeover && CALL_MUX_WITH_RET(conn->mux, takeover(conn, curtid, 1)) == 0) {
 			conn_delete_from_tree(conn, curtid);
 			return conn;
 		}
@@ -1555,7 +1555,7 @@ kill_random_idle_conn(struct server *srv)
 			 */
 			_HA_ATOMIC_INC(&srv->curr_used_conns);
 		}
-		conn->mux->destroy(conn->ctx);
+		CALL_MUX_NO_RET(conn->mux, destroy(conn->ctx));
 		return 1;
 	}
 	return 0;
@@ -1765,7 +1765,7 @@ int be_reuse_connection(int64_t hash, struct session *sess,
 			}
 
 			if (avail >= 1) {
-				if (srv_conn->mux->attach(srv_conn, sc->sedesc, sess) == -1) {
+				if (CALL_MUX_WITH_RET(srv_conn->mux, attach(srv_conn, sc->sedesc, sess)) == -1) {
 					if (sc_reset_endp(sc) < 0)
 						goto err;
 					sc_ep_clr(sc, ~SE_FL_DETACHED);
@@ -1879,7 +1879,7 @@ int connect_server(struct stream *s)
 			 * It will in turn call srv_release_conn through
 			 * conn_free which also uses it.
 			 */
-			tokill_conn->mux->destroy(tokill_conn->ctx);
+			CALL_MUX_NO_RET(tokill_conn->mux, destroy(tokill_conn->ctx));
 		}
 		else {
 			HA_SPIN_UNLOCK(IDLE_CONNS_LOCK, &idle_conns[tid].idle_conns_lock);
@@ -2067,7 +2067,7 @@ int connect_server(struct stream *s)
 			 * available.
 			 *
 			 * This check must be performed before conn_prepare()
-			 * to ensure consistency accross the whole stack, in
+			 * to ensure consistency across the whole stack, in
 			 * particular for QUIC between quic-conn and mux layer.
 			 */
 			if (IS_HTX_STRM(s) && srv->use_ssl &&
@@ -2122,6 +2122,11 @@ int connect_server(struct stream *s)
 		if (srv && (srv->flags & SRV_F_SOCKS4_PROXY)) {
 			srv_conn->send_proxy_ofs = 1;
 			srv_conn->flags |= CO_FL_SOCKS4;
+		}
+
+		if (srv && srv->mux_proto && isteq(srv->mux_proto->token, ist("qmux"))) {
+			srv_conn->flags |= (CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND);
+			may_start_mux_now = 0;
 		}
 
 #if defined(USE_OPENSSL) && defined(TLSEXT_TYPE_application_layer_protocol_negotiation)
@@ -2204,7 +2209,7 @@ int connect_server(struct stream *s)
 	 */
 	if (may_start_mux_now) {
 		const struct mux_ops *alt_mux =
-		  likely(!(s->flags & SF_WEBSOCKET)) ? NULL : srv_get_ws_proto(srv);
+		  likely(!(s->flags & SF_WEBSOCKET) || !srv) ? NULL : srv_get_ws_proto(srv);
 		if (conn_install_mux_be(srv_conn, s->scb, s->sess, alt_mux) < 0) {
 			conn_full_close(srv_conn);
 			return SF_ERR_INTERNAL;
@@ -2266,7 +2271,7 @@ int connect_server(struct stream *s)
 
 		s->flags |= SF_CURR_SESS;
 		count = _HA_ATOMIC_ADD_FETCH(&srv->cur_sess, 1);
-		HA_ATOMIC_UPDATE_MAX(&srv->counters.cur_sess_max, count);
+		COUNTERS_UPDATE_MAX(&srv->counters.cur_sess_max, count);
 		if (s->be->lbprm.server_take_conn)
 			s->be->lbprm.server_take_conn(srv);
 	}
@@ -3063,7 +3068,7 @@ int be_downtime(struct proxy *px) {
 
 /* Checks if <px> backend supports the addition of servers at runtime. Either a
  * backend or a defaults proxy are supported. If proxy is incompatible, <msg>
- * will be allocated to contain a textual explaination.
+ * will be allocated to contain a textual explanation.
  */
 int be_supports_dynamic_srv(struct proxy *px, char **msg)
 {

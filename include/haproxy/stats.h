@@ -24,6 +24,7 @@
 #define _HAPROXY_STATS_H
 
 #include <haproxy/api.h>
+#include <haproxy/counters.h>
 #include <haproxy/listener-t.h>
 #include <haproxy/stats-t.h>
 #include <haproxy/tools-t.h>
@@ -167,7 +168,8 @@ static inline enum stats_domain_px_cap stats_px_get_cap(uint32_t domain)
 }
 
 int stats_allocate_proxy_counters_internal(struct extra_counters **counters,
-                                           int type, int px_cap);
+                                           int type, int px_cap,
+                                           char **storage, size_t step);
 int stats_allocate_proxy_counters(struct proxy *px);
 
 void stats_register_module(struct stats_module *m);

@@ -38,7 +38,6 @@
 #include <haproxy/quic_cc-t.h>
 #include <haproxy/quic_frame-t.h>
 #include <haproxy/quic_openssl_compat-t.h>
-#include <haproxy/quic_stats-t.h>
 #include <haproxy/quic_tls-t.h>
 #include <haproxy/quic_tp-t.h>
 #include <haproxy/show_flags-t.h>
@@ -401,6 +400,8 @@ struct quic_conn {
 
 	struct eb_root streams_by_id; /* qc_stream_desc tree */
 
+	const char *alpn;
+
 	/* MUX */
 	struct qcc *qcc;
 	struct task *timer_task;
@@ -409,7 +410,9 @@ struct quic_conn {
 	/* Handshake expiration date */
 	unsigned int hs_expire;
 
-	const struct qcc_app_ops *app_ops;
+	/* Callback to close any stream after MUX closure - set by the MUX itself */
+	int (*strm_reject)(struct list *out, uint64_t stream_id);
+
 	/* Proxy counters */
 	struct quic_counters *prx_counters;
 

@@ -25,6 +25,7 @@
 #include <import/ebtree-t.h>
 #include <haproxy/api-t.h>
 #include <haproxy/buf-t.h>
+#include <haproxy/counters-t.h>
 
 /* Flags for applet.ctx.stats.flags */
 #define STAT_F_FMT_HTML   0x00000001    /* dump the stats in HTML format */
@@ -36,7 +37,7 @@
 #define STAT_F_CHUNKED    0x00000040    /* use chunked encoding (HTTP/1.1) */
 #define STAT_F_JSON_SCHM  0x00000080    /* dump the json schema */
 
-#define STAT_F_HIDEVER    0x00000100    /* conf: do not report the version and reldate */
+#define STAT_F_SHOWVER    0x00000100    /* conf: report the version and reldate */
 #define STAT_F_SHNODE     0x00000200    /* conf: show node name */
 #define STAT_F_SHDESC     0x00000400    /* conf: show description */
 #define STAT_F_SHLGNDS    0x00000800    /* conf: show legends */
@@ -515,23 +516,13 @@ struct field {
 	} u;
 };
 
-enum counters_type {
-	COUNTERS_FE = 0,
-	COUNTERS_BE,
-	COUNTERS_SV,
-	COUNTERS_LI,
-	COUNTERS_RSLV,
-
-	COUNTERS_OFF_END
-};
-
 /* Entity used to generate statistics on an HAProxy component */
 struct stats_module {
 	struct list list;
 	const char *name;
 
-	/* functor used to generate the stats module using counters provided through data parameter */
-	int (*fill_stats)(void *data, struct field *, unsigned int *);
+	/* function used to generate the stats module using counters provided through data parameter */
+	int (*fill_stats)(struct stats_module *, struct extra_counters *, struct field *, unsigned int *);
 
 	struct stat_col *stats;  /* statistics provided by the module */
 	void *counters;          /* initial values of allocated counters */
@@ -541,12 +532,6 @@ struct stats_module {
 
 	uint32_t domain_flags;   /* stats application domain for this module */
 	char clearable;          /* reset on a clear counters */
-};
-
-struct extra_counters {
-	char *data; /* heap containing counters allocated in a linear fashion */
-	size_t size; /* size of allocated data */
-	enum counters_type type; /* type of object containing the counters */
 };
 
 /* stats_domain is used in a flag as a 1 byte field */
@@ -593,58 +578,9 @@ struct show_stat_ctx {
 	int iid, type, sid;	/* proxy id, type and service id if bounding of stats is enabled */
 	int st_code;		/* the status code returned by an action */
 	struct buffer chunk;    /* temporary buffer which holds a single-line output */
+	struct watcher px_watch;  /* watcher to automatically update obj1 on backend deletion */
 	struct watcher srv_watch; /* watcher to automatically update obj2 on server deletion */
 	enum stat_state state;  /* phase of output production */
 };
-
-extern THREAD_LOCAL void *trash_counters;
-
-#define EXTRA_COUNTERS(name) \
-	struct extra_counters *name
-
-#define EXTRA_COUNTERS_GET(counters, mod) \
-	(likely(counters) ? \
-		((void *)((counters)->data + (mod)->counters_off[(counters)->type])) : \
-		(trash_counters))
-
-#define EXTRA_COUNTERS_REGISTER(counters, ctype, alloc_failed_label) \
-	do {                                                         \
-		typeof(*counters) _ctr;                              \
-		_ctr = calloc(1, sizeof(*_ctr));                     \
-		if (!_ctr)                                           \
-			goto alloc_failed_label;                     \
-		_ctr->type = (ctype);                                \
-		*(counters) = _ctr;                                  \
-	} while (0)
-
-#define EXTRA_COUNTERS_ADD(mod, counters, new_counters, csize) \
-	do {                                                   \
-		typeof(counters) _ctr = (counters);            \
-		(mod)->counters_off[_ctr->type] = _ctr->size;  \
-		_ctr->size += (csize);                         \
-	} while (0)
-
-#define EXTRA_COUNTERS_ALLOC(counters, alloc_failed_label) \
-	do {                                               \
-		typeof(counters) _ctr = (counters);        \
-		_ctr->data = malloc((_ctr)->size);         \
-		if (!_ctr->data)                           \
-			goto alloc_failed_label;           \
-	} while (0)
-
-#define EXTRA_COUNTERS_INIT(counters, mod, init_counters, init_counters_size) \
-	do {                                                                  \
-		typeof(counters) _ctr = (counters);                           \
-		memcpy(_ctr->data + mod->counters_off[_ctr->type],            \
-		       (init_counters), (init_counters_size));                \
-	} while (0)
-
-#define EXTRA_COUNTERS_FREE(counters)           \
-	do {                                    \
-		if (counters) {                 \
-			free((counters)->data); \
-			free(counters);         \
-		}                               \
-	} while (0)
 
 #endif /* _HAPROXY_STATS_T_H */

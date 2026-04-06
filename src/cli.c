@@ -56,7 +56,6 @@
 #include <haproxy/server.h>
 #include <haproxy/session.h>
 #include <haproxy/sock.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stconn.h>
 #include <haproxy/stream.h>
 #include <haproxy/systemd.h>
@@ -401,6 +400,21 @@ struct cli_kw* cli_find_kw_exact(char **args)
 
 void cli_register_kw(struct cli_kw_list *kw_list)
 {
+	struct cli_kw *kw;
+
+	for (kw = &kw_list->kw[0]; kw->str_kw[0]; kw++) {
+		/* store declaration file/line if known */
+		if (kw->exec_ctx.type)
+			continue;
+
+		if (caller_initcall) {
+			kw->exec_ctx.type = TH_EX_CTX_INITCALL;
+			kw->exec_ctx.initcall = caller_initcall;
+		} else {
+			kw->exec_ctx.type = TH_EX_CTX_CLI_KWL;
+			kw->exec_ctx.cli_kwl = kw_list;
+		}
+	}
 	LIST_APPEND(&cli_keywords.list, &kw_list->list);
 }
 
@@ -617,12 +631,22 @@ static int cli_parse_global(char **args, int section_type, struct proxy *curpx,
 		}
 		global.cli_fe->maxconn = maxconn;
 	}
+	else if (strcmp(args[1], "calculate-max-counters") == 0) {
+		if (!strcasecmp(args[2], "on"))
+			return 0;
+		else if (!strcasecmp(args[2], "off")) {
+			global.tune.options |= GTUNE_NO_MAX_COUNTER;
+			return 0;
+		}
+		memprintf(err, "'%s' only supports 'on' and 'off', received '%s'", args[1], args[2]);
+		return -1;
+	}
 	else if (strcmp(args[1], "bind-process") == 0) {
 		memprintf(err, "'%s %s' is not supported anymore.", args[0], args[1]);
 		return -1;
 	}
 	else {
-		memprintf(err, "'%s' only supports 'socket', 'maxconn', 'bind-process' and 'timeout' (got '%s')", args[0], args[1]);
+		memprintf(err, "'%s' only supports 'socket', 'maxconn', 'bind-process', 'calculate-max-counters'  and 'timeout' (got '%s')", args[0], args[1]);
 		return -1;
 	}
 	return 0;
@@ -840,6 +864,7 @@ static int cli_process_cmdline(struct appctx *appctx)
 	else if (kw->level == ACCESS_EXPERIMENTAL)
 		mark_tainted(TAINTED_CLI_EXPERIMENTAL_MODE);
 
+	appctx->cli_ctx.kw = kw;
 	appctx->cli_ctx.io_handler = kw->io_handler;
 	appctx->cli_ctx.io_release = kw->io_release;
 
@@ -859,6 +884,7 @@ static int cli_process_cmdline(struct appctx *appctx)
 	goto end;
 
   fail:
+	appctx->cli_ctx.kw = NULL;
 	appctx->cli_ctx.io_handler = NULL;
 	appctx->cli_ctx.io_release = NULL;
 
@@ -1200,17 +1226,19 @@ void cli_io_handler(struct appctx *appctx)
 
 			case CLI_ST_CALLBACK: /* use custom pointer */
 				if (appctx->cli_ctx.io_handler)
-					if (appctx->cli_ctx.io_handler(appctx)) {
+					if (EXEC_CTX_WITH_RET(appctx->cli_ctx.kw->exec_ctx, appctx->cli_ctx.io_handler(appctx))) {
 						appctx->t->expire = TICK_ETERNITY;
 						appctx->st0 = CLI_ST_PROMPT;
 						if (appctx->cli_ctx.io_release) {
-							appctx->cli_ctx.io_release(appctx);
+							EXEC_CTX_NO_RET(appctx->cli_ctx.kw->exec_ctx, appctx->cli_ctx.io_release(appctx));
 							appctx->cli_ctx.io_release = NULL;
+							appctx->cli_ctx.kw = NULL;
 							/* some release handlers might have
 							 * pending output to print.
 							 */
 							continue;
 						}
+						appctx->cli_ctx.kw = NULL;
 					}
 				break;
 			default: /* abnormal state */
@@ -1316,8 +1344,9 @@ static void cli_release_handler(struct appctx *appctx)
 	free_trash_chunk(appctx->cli_ctx.cmdline);
 
 	if (appctx->cli_ctx.io_release) {
-		appctx->cli_ctx.io_release(appctx);
+		EXEC_CTX_NO_RET(appctx->cli_ctx.kw->exec_ctx, appctx->cli_ctx.io_release(appctx));
 		appctx->cli_ctx.io_release = NULL;
+		appctx->cli_ctx.kw = NULL;
 	}
 	else if (appctx->st0 == CLI_ST_PRINT_DYN || appctx->st0 == CLI_ST_PRINT_DYNERR) {
 		struct cli_print_ctx *ctx = applet_reserve_svcctx(appctx, sizeof(*ctx));
@@ -2121,6 +2150,14 @@ static int cli_parse_wait(char **args, char *payload, struct appctx *appctx, voi
 		ctx->args[1] = ist0(sv_name);
 		ctx->cond = CLI_WAIT_COND_SRV_UNUSED;
 	}
+	else if (strcmp(args[2], "be-removable") == 0) {
+		if (!*args[3])
+			return cli_err(appctx, "Missing backend name.\n");
+		ctx->args[0] = strdup(args[3]);
+		if (!ctx->args[0])
+			return cli_err(appctx, "Out of memory trying to clone the backend name.\n");
+		ctx->cond = CLI_WAIT_COND_BE_UNUSED;
+	}
 	else if (*args[2]) {
 		/* show the command's help either upon request (-h) or error */
 		err = "Usage: wait {-h|<duration>} [condition [args...]]\n"
@@ -2166,9 +2203,15 @@ static int cli_io_handler_wait(struct appctx *appctx)
 
 	/* here we should evaluate our waiting conditions, if any */
 
-	if (ctx->cond == CLI_WAIT_COND_SRV_UNUSED) {
-		/* check if the server in args[0]/args[1] can be released now */
-		ret = srv_check_for_deletion(ctx->args[0], ctx->args[1], NULL, NULL, &ctx->msg);
+	if (ctx->cond == CLI_WAIT_COND_SRV_UNUSED ||
+	    ctx->cond == CLI_WAIT_COND_BE_UNUSED) {
+		if (ctx->cond == CLI_WAIT_COND_SRV_UNUSED) {
+			/* check if the server in args[0]/args[1] can be released now */
+			ret = srv_check_for_deletion(ctx->args[0], ctx->args[1], NULL, NULL, &ctx->msg);
+		}
+		else {
+			ret = be_check_for_deletion(ctx->args[0], NULL, &ctx->msg);
+		}
 
 		if (ret < 0) {
 			/* unrecoverable failure */
@@ -2591,8 +2634,9 @@ static int cli_parse_echo(char **args, char *payload, struct appctx *appctx, voi
 
 static int _send_status(char **args, char *payload, struct appctx *appctx, void *private)
 {
-	struct listener *mproxy_li;
 	struct mworker_proc *proc;
+	struct stconn *sc = appctx_sc(appctx);
+	struct listener *mproxy_li = strm_li(__sc_strm(sc));
 	char *msg = "READY\n";
 	int pid;
 
@@ -2602,12 +2646,18 @@ static int _send_status(char **args, char *payload, struct appctx *appctx, void 
 	pid = atoi(args[2]);
 
 	list_for_each_entry(proc, &proc_list, list) {
+
 		/* update status of the new worker */
 		if (proc->pid == pid) {
 			proc->options &= ~PROC_O_INIT;
-			mproxy_li = fdtab[proc->ipc_fd[0]].owner;
-			stop_listener(mproxy_li, 0, 0, 0);
+
+			/* the proxy used to receive the _send_status must be
+			 * the one corresponding to the PID we received in
+			 * argument */
+			BUG_ON(proc->ipc_fd[0] < 0);
+			BUG_ON(mproxy_li != fdtab[proc->ipc_fd[0]].owner);
 		}
+
 		/* send TERM to workers, which have exceeded max_reloads counter */
 		if (max_reloads != -1) {
 			if ((proc->options & PROC_O_TYPE_WORKER) &&
@@ -2618,6 +2668,15 @@ static int _send_status(char **args, char *payload, struct appctx *appctx, void 
 
 		}
 	}
+
+	/* the sockpair between the master and the worker is
+	 * used temporarily as a listener to receive
+	 * _send_status. Once it is received we don't want to
+	 * use this FD as a listener anymore, but only as a
+	 * server, to allow only connections from the master to
+	 * the worker for the master CLI */
+	BUG_ON(mproxy_li == NULL);
+	stop_listener(mproxy_li, 0, 0, 0);
 
 	/* At this point we are sure, that newly forked worker is started,
 	 * so we can write our PID in a pidfile, if provided. Master doesn't
@@ -2817,7 +2876,7 @@ static int pcli_prefix_to_pid(const char *prefix)
 		if (*errtol != '\0')
 			return -1;
 		list_for_each_entry(child, &proc_list, list) {
-			if (!(child->options & PROC_O_TYPE_WORKER))
+			if (!(child->options & PROC_O_TYPE_WORKER) || (child->options & PROC_O_INIT))
 				continue;
 			if (child->pid == proc_pid){
 				return child->pid;
@@ -2840,7 +2899,7 @@ static int pcli_prefix_to_pid(const char *prefix)
 		/* chose the right process, the current one is the one with the
 		 least number of reloads */
 		list_for_each_entry(child, &proc_list, list) {
-			if (!(child->options & PROC_O_TYPE_WORKER))
+			if (!(child->options & PROC_O_TYPE_WORKER) || (child->options & PROC_O_INIT))
 				continue;
 			if (child->reloads == 0)
 				return child->pid;

@@ -97,7 +97,6 @@ int http_wait_for_request(struct stream *s, struct channel *req, int an_bit)
 	struct htx *htx;
 	struct htx_sl *sl;
 	char http_ver;
-	int len;
 
 	DBG_TRACE_ENTER(STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA, s, txn, msg);
 
@@ -131,14 +130,16 @@ int http_wait_for_request(struct stream *s, struct channel *req, int an_bit)
 
 	htx = htxbuf(&req->buf);
 	sl = http_get_stline(htx);
-	len = HTX_SL_REQ_VLEN(sl);
-	if (len < 6) {
+	if ((sl->flags & HTX_SL_F_NOT_HTTP) || HTX_SL_REQ_VLEN(sl) != 8) {
+		/* Not an HTTP request */
 		http_ver = 0;
+		msg->vsn = 0;
 	}
 	else {
 		char *ptr;
 
 		ptr = HTX_SL_REQ_VPTR(sl);
+		msg->vsn = ((ptr[5] - '0') << 4) + (ptr[7] - '0');
 		http_ver = ptr[5] - '0';
 	}
 
@@ -1223,11 +1224,14 @@ static __inline int do_l7_retry(struct stream *s, struct stconn *sc)
 	}
 
 	b_free(&req->buf);
+
 	/* Swap the L7 buffer with the channel buffer */
 	/* We know we stored the co_data as b_data, so get it there */
 	co_data = b_data(&s->txn->l7_buffer);
 	b_set_data(&s->txn->l7_buffer, b_size(&s->txn->l7_buffer));
-	b_xfer(&req->buf, &s->txn->l7_buffer, b_data(&s->txn->l7_buffer));
+
+	req->buf = s->txn->l7_buffer;
+	s->txn->l7_buffer = BUF_NULL;
 	co_set_data(req, co_data);
 
 	DBG_TRACE_DEVEL("perform a L7 retry", STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA, s, s->txn);
@@ -1469,6 +1473,26 @@ int http_wait_for_response(struct stream *s, struct channel *rep, int an_bit)
 	 */
 	BUG_ON(htx_get_first_type(htx) != HTX_BLK_RES_SL);
 	sl = http_get_stline(htx);
+
+	if ((sl->flags & HTX_SL_F_NOT_HTTP) || HTX_SL_RES_VLEN(sl) != 8)  {
+		/* Not an HTTP response */
+		msg->vsn = 0;
+	}
+	else if (objt_server(s->target)) {
+		/* HTTP response from a server, use it to set the response version */
+		char *ptr;
+
+		ptr = HTX_SL_RES_VPTR(sl);
+		msg->vsn = ((ptr[5] - '0') << 4) + (ptr[7] - '0');
+
+		/* If front endpoint is an applet, use the server version for the request */
+		if (sc_ep_test(s->scf, SE_FL_T_APPLET))
+			txn->req.vsn = msg->vsn;
+	}
+	else {
+		/* HTTP response from an applet, use the request version for the response */
+		msg->vsn = txn->req.vsn;
+	}
 
 	/* Adjust server's health based on status code. Note: status codes 501
 	 * and 505 are triggered on demand by client request, so we must not
@@ -2804,8 +2828,7 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 	int act_opts = 0;
 
 	if ((s->scf->flags & SC_FL_ERROR) ||
-	    ((s->scf->flags & (SC_FL_EOS|SC_FL_ABRT_DONE)) &&
-	     proxy_abrt_close_def(px, 1)))
+	    ((s->scf->flags & SC_FL_EOS) && proxy_abrt_close_def(px, 1)))
 		act_opts |= ACT_OPT_FINAL | ACT_OPT_FINAL_EARLY;
 
 	/* If "the current_rule_list" match the executed rule list, we are in
@@ -2817,7 +2840,6 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 		int forced = s->flags & SF_RULE_FYIELD;
 
 		rule = s->current_rule;
-		s->current_rule = NULL;
 		s->flags &= ~SF_RULE_FYIELD;
 		if (s->current_rule_list == rules || (def_rules && s->current_rule_list == def_rules)) {
 			if (forced)
@@ -2833,11 +2855,12 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 
 	list_for_each_entry(rule, s->current_rule_list, list) {
  resume_rule:
+		s->current_rule = rule;
+
 		/* check if budget is exceeded and we need to continue on the next
 		 * polling loop, unless we know that we cannot yield
 		 */
 		if (s->rules_bcount++ >= global.tune.max_rules_at_once && !(act_opts & ACT_OPT_FINAL)) {
-			s->current_rule = rule;
 			s->flags |= SF_RULE_FYIELD;
 			rule_ret = HTTP_RULE_RES_FYIELD;
 			task_wakeup(s->task, TASK_WOKEN_MSG);
@@ -2860,7 +2883,8 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 				s->waiting_entity.ptr  = NULL;
 			}
 
-			switch (rule->action_ptr(rule, px, sess, s, act_opts)) {
+			switch (EXEC_CTX_WITH_RET(rule->exec_ctx,
+			                          rule->action_ptr(rule, px, sess, s, act_opts))) {
 				case ACT_RET_CONT:
 					break;
 				case ACT_RET_STOP:
@@ -2869,7 +2893,6 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 					s->last_entity.ptr  = rule;
 					goto end;
 				case ACT_RET_YIELD:
-					s->current_rule = rule;
 					if (act_opts & ACT_OPT_FINAL) {
 						send_log(s->be, LOG_WARNING,
 							 "Internal error: action yields while it is  no long allowed "
@@ -2959,13 +2982,17 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 
 	if (def_rules && s->current_rule_list == def_rules) {
 		s->current_rule_list = rules;
+		s->current_rule = NULL;
 		goto restart;
 	}
 
   end:
 	/* if the ruleset evaluation is finished reset the strict mode */
-	if (rule_ret != HTTP_RULE_RES_YIELD && rule_ret != HTTP_RULE_RES_FYIELD)
+	if (rule_ret != HTTP_RULE_RES_YIELD && rule_ret != HTTP_RULE_RES_FYIELD) {
+		s->current_rule_list = NULL;
+		s->current_rule = NULL;
 		txn->req.flags &= ~HTTP_MSGF_SOFT_RW;
+	}
 
 	/* we reached the end of the rules, nothing to report */
 	return rule_ret;
@@ -2992,8 +3019,7 @@ static enum rule_result http_res_get_intercept_rule(struct proxy *px, struct lis
 	if (final)
 		act_opts |= ACT_OPT_FINAL;
 	if ((s->scf->flags & SC_FL_ERROR) ||
-	    ((s->scf->flags & (SC_FL_EOS|SC_FL_ABRT_DONE)) &&
-	     proxy_abrt_close_def(px, 1)))
+	    ((s->scf->flags & SC_FL_EOS) && proxy_abrt_close_def(px, 1)))
 		act_opts |= ACT_OPT_FINAL | ACT_OPT_FINAL_EARLY;
 
 	/* If "the current_rule_list" match the executed rule list, we are in
@@ -3005,7 +3031,6 @@ static enum rule_result http_res_get_intercept_rule(struct proxy *px, struct lis
 		int forced = s->flags & SF_RULE_FYIELD;
 
 		rule = s->current_rule;
-		s->current_rule = NULL;
 		s->flags &= ~SF_RULE_FYIELD;
 		if (s->current_rule_list == rules || (def_rules && s->current_rule_list == def_rules)) {
 			if (forced)
@@ -3022,11 +3047,12 @@ static enum rule_result http_res_get_intercept_rule(struct proxy *px, struct lis
 
 	list_for_each_entry(rule, s->current_rule_list, list) {
  resume_rule:
+		s->current_rule = rule;
+
 		/* check if budget is exceeded and we need to continue on the next
 		 * polling loop, unless we know that we cannot yield
 		 */
 		if (s->rules_bcount++ >= global.tune.max_rules_at_once && !(act_opts & ACT_OPT_FINAL)) {
-			s->current_rule = rule;
 			s->flags |= SF_RULE_FYIELD;
 			rule_ret = HTTP_RULE_RES_FYIELD;
 			task_wakeup(s->task, TASK_WOKEN_MSG);
@@ -3049,7 +3075,8 @@ resume_execution:
 				s->waiting_entity.ptr  = NULL;
 			}
 
-			switch (rule->action_ptr(rule, px, sess, s, act_opts)) {
+			switch (EXEC_CTX_WITH_RET(rule->exec_ctx,
+			                          rule->action_ptr(rule, px, sess, s, act_opts))) {
 				case ACT_RET_CONT:
 					break;
 				case ACT_RET_STOP:
@@ -3058,7 +3085,6 @@ resume_execution:
 					s->last_entity.ptr  = rule;
 					goto end;
 				case ACT_RET_YIELD:
-					s->current_rule = rule;
 					if (act_opts & ACT_OPT_FINAL) {
 						send_log(s->be, LOG_WARNING,
 							 "Internal error: action yields while it is no long allowed "
@@ -3138,13 +3164,17 @@ resume_execution:
 
 	if (def_rules && s->current_rule_list == def_rules) {
 		s->current_rule_list = rules;
+		s->current_rule = NULL;
 		goto restart;
 	}
 
   end:
 	/* if the ruleset evaluation is finished reset the strict mode */
-	if (rule_ret != HTTP_RULE_RES_YIELD && rule_ret != HTTP_RULE_RES_FYIELD)
+	if (rule_ret != HTTP_RULE_RES_YIELD && rule_ret != HTTP_RULE_RES_FYIELD) {
+		s->current_rule_list = NULL;
+		s->current_rule = NULL;
 		txn->rsp.flags &= ~HTTP_MSGF_SOFT_RW;
+	}
 
 	/* we reached the end of the rules, nothing to report */
 	return rule_ret;
@@ -4089,6 +4119,8 @@ static int http_handle_stats(struct stream *s, struct channel *req, struct proxy
 	ctx->flags |= STAT_F_FMT_HTML; /* assume HTML mode by default */
 	if ((msg->flags & HTTP_MSGF_VER_11) && (txn->meth != HTTP_METH_HEAD))
 		ctx->flags |= STAT_F_CHUNKED;
+
+	watcher_init(&ctx->px_watch,  &ctx->obj1, offsetof(struct proxy, watcher_list));
 	watcher_init(&ctx->srv_watch, &ctx->obj2, offsetof(struct server, watcher_list));
 
 	htx = htxbuf(&req->buf);
@@ -4303,20 +4335,10 @@ enum rule_result http_wait_for_msg_body(struct stream *s, struct channel *chn,
 	}
 
 	if (channel_htx_full(chn, htx, global.tune.maxrewrite) || sc_waiting_room(chn_prod(chn))) {
-		struct buffer lbuf;
-		char *area;
+		struct buffer lbuf = BUF_NULL;
 
-		if (large_buffer == 0 || b_is_large(&chn->buf))
-			goto end; /* don't use large buffer or large buffer is full */
-
-		/* normal buffer is full, allocate a large one
-		 */
-		area = pool_alloc(pool_head_large_buffer);
-		if (!area)
-			goto end; /* Allocation failure: TODO must be improved to use buffer_wait */
-		lbuf = b_make(area, global.tune.bufsize_large, 0, 0);
-		htx_xfer_blks(htx_from_buf(&lbuf), htx, htx_used_space(htx), HTX_BLK_UNUSED);
-		htx_to_buf(htx, &chn->buf);
+		if (large_buffer == 0 || b_is_large(&chn->buf) || !htx_move_to_large_buffer(&lbuf, &chn->buf))
+			goto end; /* don't use large buffer or already a large buffer */
 		b_free(&chn->buf);
 		offer_buffers(s, 1);
 		chn->buf = lbuf;
@@ -4332,8 +4354,7 @@ enum rule_result http_wait_for_msg_body(struct stream *s, struct channel *chn,
 	/* we get here if we need to wait for more data */
 
 	if ((s->scf->flags & SC_FL_ERROR) ||
-	    ((s->scf->flags & (SC_FL_EOS|SC_FL_ABRT_DONE)) &&
-	     proxy_abrt_close_def(s->be, 1)))
+	    ((s->scf->flags & SC_FL_EOS) && proxy_abrt_close_def(s->be, 1)))
 		ret = HTTP_RULE_RES_CONT;
 	else if (!(chn_prod(chn)->flags & (SC_FL_ERROR|SC_FL_EOS|SC_FL_ABRT_DONE))) {
 		if (!tick_isset(chn->analyse_exp))
@@ -4713,6 +4734,9 @@ int http_forward_proxy_resp(struct stream *s, int final)
 		if (s->txn->meth == HTTP_METH_HEAD)
 			htx_skip_msg_payload(htx);
 
+		/* Response from haproxy, override HTTP response version using the request one */
+		s->txn->rsp.vsn = s->txn->req.vsn;
+
 		channel_auto_read(req);
 		channel_abort(req);
 		channel_htx_erase(req, htxbuf(&req->buf));
@@ -4733,6 +4757,7 @@ int http_forward_proxy_resp(struct stream *s, int final)
 	data = htx->data - co_data(res);
 	c_adv(res, data);
 	htx->first = -1;
+	s->scf->bytes_out += data;
 	return 1;
 }
 

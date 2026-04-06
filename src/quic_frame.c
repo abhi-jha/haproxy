@@ -17,7 +17,7 @@
 #include <haproxy/quic_enc.h>
 #include <haproxy/quic_frame.h>
 #include <haproxy/quic_rx-t.h>
-#include <haproxy/quic_tp-t.h>
+#include <haproxy/quic_tp.h>
 #include <haproxy/quic_trace.h>
 #include <haproxy/quic_tx.h>
 #include <haproxy/trace.h>
@@ -1011,6 +1011,47 @@ static int quic_build_handshake_done_frame(unsigned char **pos, const unsigned c
 	return 1;
 }
 
+/* Encodes a QX_TRANSPORT_PARAMETER <frm> frame at <pos> buffer position.
+ * Returns 1 on success else 0.
+ */
+static int quic_build_qmux_transport_parameters(unsigned char **pos, const unsigned char *end,
+                                                struct quic_frame *frm, struct quic_conn *conn)
+{
+	unsigned char *old = *pos;
+	struct buffer buf;
+
+	/* Reserve space for Length field encoded as a max varint size. */
+	if (end - *pos < 8)
+		return 0;
+
+	/* Encode a 0 length field for now. */
+	buf = b_make((char *)*pos, end - *pos, 0, 0);
+	if (!b_quic_enc_int(&buf, 0, 8))
+		return 0;
+	*pos += 8;
+
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_MAX_IDLE_TIMEOUT, 30000))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_DATA, 16384))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, 16384))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, 16384))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_UNI, 16384))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_BIDI, 100))
+		return 0;
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_UNI, 100))
+		return 0;
+
+	/* Re-encode the real length field now. */
+	buf = b_make((char *)old, 8, 0, 0);
+	b_quic_enc_int(&buf, *pos - old - 8, 8);
+
+	return 1;
+}
+
 /* Parse a HANDSHAKE_DONE frame at QUIC layer at <pos> buffer position with <end> as end into <frm> frame.
  * Always succeed.
  */
@@ -1018,6 +1059,28 @@ static int quic_parse_handshake_done_frame(struct quic_frame *frm, struct quic_c
                                            const unsigned char **pos, const unsigned char *end)
 {
 	/* No field */
+	return 1;
+}
+
+/* Parse a QX_TRANSPORT_PARAMETER frame at <pos> buffer position.
+ * Returns 1 on success else 0.
+ */
+static int quic_parse_qmux_transport_parameters(struct quic_frame *frm, struct quic_conn *qc,
+                                                const unsigned char **pos, const unsigned char *end)
+{
+	struct qf_qx_transport_parameters *params_frm = &frm->qmux_transport_params;
+	uint64_t len;
+
+	if (!quic_dec_int(&len, pos, end))
+		return 0;
+
+	if (len > end - *pos)
+		return 0;
+	end = *pos + len;
+
+	if (!quic_transport_params_decode(&params_frm->params, 1, *pos, end))
+		return 0;
+
 	return 1;
 }
 
@@ -1121,11 +1184,25 @@ const struct quic_frame_parser quic_frame_parsers[] = {
  * };
  */
 
+/* quic-on-streams transport parameters frame. */
+const uint64_t QUIC_FT_QX_TRANSPORT_PARAMETERS = 0x3f5153300d0a0d0a;
+const struct quic_frame_parser qf_parser_qx_transport_parameters = {
+	.func = quic_parse_qmux_transport_parameters,
+	.mask = 0,
+	.flags = 0,
+};
+const struct quic_frame_builder qf_builder_qx_transport_parameters = {
+	.func = quic_build_qmux_transport_parameters,
+	.mask = 0,
+	.flags = 0,
+};
+
 /* Returns true if frame <type> is supported. */
 static inline int quic_frame_type_is_known(uint64_t type)
 {
 	/* Complete here for extra frame types greater than QUIC_FT_MAX. */
-	return type < QUIC_FT_MAX;
+	return type < QUIC_FT_MAX ||
+	       (type == QUIC_FT_QX_TRANSPORT_PARAMETERS);
 }
 
 static const struct quic_frame_parser *qf_parser(uint64_t type)
@@ -1134,6 +1211,8 @@ static const struct quic_frame_parser *qf_parser(uint64_t type)
 		return &quic_frame_parsers[type];
 
 	/* Complete here for extra frame types greater than QUIC_FT_MAX. */
+	if (type == QUIC_FT_QX_TRANSPORT_PARAMETERS)
+		return &qf_parser_qx_transport_parameters;
 
 	ABORT_NOW();
 	return NULL;
@@ -1145,22 +1224,26 @@ const struct quic_frame_builder *qf_builder(uint64_t type)
 		return &quic_frame_builders[type];
 
 	/* Complete here for extra frame types greater than QUIC_FT_MAX. */
+	if (type == QUIC_FT_QX_TRANSPORT_PARAMETERS)
+		return &qf_builder_qx_transport_parameters;
 
 	ABORT_NOW();
 	return NULL;
 }
 
-/* Decode a QUIC frame at <pos> buffer position into <frm> frame.
- * Returns 1 if succeeded (enough data at <pos> buffer position to parse the frame), 0 if not.
+/* Parse frame type in buffer starting at <pos> and ending at <end> and store
+ * it in <frm> object.
+ *
+ * Returns 1 on success else 0.
  */
-int qc_parse_frm(struct quic_frame *frm, struct quic_rx_packet *pkt,
-                 const unsigned char **pos, const unsigned char *end,
-                 struct quic_conn *qc)
+int qc_parse_frm_type(struct quic_frame *frm,
+                      const unsigned char **pos, const unsigned char *end,
+                      struct quic_conn *qc)
 {
 	int ret = 0;
-	const struct quic_frame_parser *parser;
 
 	TRACE_ENTER(QUIC_EV_CONN_PRSFRM, qc);
+
 	if (end <= *pos) {
 		TRACE_DEVEL("wrong frame", QUIC_EV_CONN_PRSFRM, qc);
 		goto leave;
@@ -1168,35 +1251,13 @@ int qc_parse_frm(struct quic_frame *frm, struct quic_rx_packet *pkt,
 
 	if (!quic_dec_int(&frm->type, pos, end)) {
 		TRACE_ERROR("malformed frame type", QUIC_EV_CONN_PRSFRM, qc);
-		quic_set_connection_close(qc, quic_err_transport(QC_ERR_FRAME_ENCODING_ERROR));
 		goto leave;
 	}
 
 	if (!quic_frame_type_is_known(frm->type)) {
-		/* RFC 9000 12.4. Frames and Frame Types
-		 *
-		 * An endpoint MUST treat the receipt of a frame of unknown type as a
-		 * connection error of type FRAME_ENCODING_ERROR.
-		 */
 		TRACE_DEVEL("wrong frame type", QUIC_EV_CONN_PRSFRM, qc, frm);
-		quic_set_connection_close(qc, quic_err_transport(QC_ERR_FRAME_ENCODING_ERROR));
 		goto leave;
 	}
-
-	parser = qf_parser(frm->type);
-	if (!(parser->mask & (1U << pkt->type))) {
-		TRACE_DEVEL("unauthorized frame", QUIC_EV_CONN_PRSFRM, qc, frm);
-		goto leave;
-	}
-
-	if (!parser->func(frm, qc, pos, end)) {
-		TRACE_DEVEL("parsing error", QUIC_EV_CONN_PRSFRM, qc, frm);
-		goto leave;
-	}
-
-	TRACE_PROTO("RX frm", QUIC_EV_CONN_PSTRM, qc, frm);
-
-	pkt->flags |= parser->flags;
 
 	ret = 1;
  leave:
@@ -1204,26 +1265,64 @@ int qc_parse_frm(struct quic_frame *frm, struct quic_rx_packet *pkt,
 	return ret;
 }
 
-/* Encode <frm> QUIC frame at <pos> buffer position.
- * Returns 1 if succeeded (enough room at <pos> buffer position to encode the frame), 0 if not.
- * The buffer is updated to point to one byte past the end of the built frame
- * only if succeeded.
+/* Checks that <frm> frame is authorized in <pkt> packet. Output parameter <flags>
+ * may be updated if the frame characteristics impacts the containing packet.
+ *
+ * Returns true for a valid frame else false.
  */
-int qc_build_frm(unsigned char **pos, const unsigned char *end,
-                 struct quic_frame *frm, struct quic_tx_packet *pkt,
+int qc_parse_frm_pkt(const struct quic_frame *frm,
+                     const struct quic_rx_packet *pkt, int *flags)
+{
+	const struct quic_frame_parser *parser = qf_parser(frm->type);
+	if (!(parser->mask & (1U << pkt->type)))
+		return 0;
+
+	*flags = parser->flags;
+	return 1;
+}
+
+/* Parse frame content in buffer starting at <pos> and ending at <end>.
+ *
+ * Returns 1 on success else 0.
+ */
+int qc_parse_frm_payload(struct quic_frame *frm,
+                         const unsigned char **pos, const unsigned char *end,
+                         struct quic_conn *qc)
+{
+	int ret = 0;
+	const struct quic_frame_parser *parser;
+
+	TRACE_ENTER(QUIC_EV_CONN_PRSFRM, qc);
+
+	parser = qf_parser(frm->type);
+	if (!parser->func(frm, qc, pos, end)) {
+		TRACE_DEVEL("parsing error", QUIC_EV_CONN_PRSFRM, qc, frm);
+		goto leave;
+	}
+
+	TRACE_PROTO("RX frm", QUIC_EV_CONN_PSTRM, qc, frm);
+
+	ret = 1;
+ leave:
+	TRACE_LEAVE(QUIC_EV_CONN_PRSFRM, qc);
+	return ret;
+}
+
+/* Encodes a <frm> QUIC frame in buffer starting at <pos> and ending
+ * at <end>. On success, <pos> is advanced up to the end of the newly encoded
+ * data.
+ *
+ * Returns 1 on success else 0.
+ */
+int qc_build_frm(struct quic_frame *frm,
+                 unsigned char **pos, const unsigned char *end,
                  struct quic_conn *qc)
 {
 	int ret = 0;
-	const struct quic_frame_builder *builder;
+	const struct quic_frame_builder *builder = qf_builder(frm->type);
 	unsigned char *p = *pos;
 
 	TRACE_ENTER(QUIC_EV_CONN_BFRM, qc);
-	builder = qf_builder(frm->type);
-	if (!(builder->mask & (1U << pkt->type))) {
-		/* XXX This it a bug to send an unauthorized frame with such a packet type XXX */
-		TRACE_ERROR("unauthorized frame", QUIC_EV_CONN_BFRM, qc, frm);
-		BUG_ON(!(builder->mask & (1U << pkt->type)));
-	}
 
 	if (!quic_enc_int(&p, end, frm->type)) {
 		TRACE_DEVEL("not enough room", QUIC_EV_CONN_BFRM, qc, frm);
@@ -1236,9 +1335,39 @@ int qc_build_frm(unsigned char **pos, const unsigned char *end,
 		goto leave;
 	}
 
-	pkt->flags |= builder->flags;
 	*pos = p;
+	ret = 1;
+ leave:
+	TRACE_LEAVE(QUIC_EV_CONN_BFRM, qc);
+	return ret;
+}
 
+/* Encodes a <frm> QUIC frame in <pkt> packet buffer via qc_build_frm() after
+ * checking packet type compatibility. Packet <pkt> flags are updated if the
+ * frame characteristics impacts it.
+ *
+ * Returns 1 on success else 0.
+ */
+int qc_build_frm_pkt(struct quic_frame *frm, struct quic_tx_packet *pkt,
+                     unsigned char **pos, const unsigned char *end,
+                     struct quic_conn *qc)
+{
+	const struct quic_frame_builder *builder = qf_builder(frm->type);
+	int ret = 0;
+
+	TRACE_ENTER(QUIC_EV_CONN_BFRM, qc);
+
+	if (pkt && !(builder->mask & (1U << pkt->type))) {
+		/* XXX This it a bug to send an unauthorized frame with such a packet type XXX */
+		TRACE_ERROR("unauthorized frame", QUIC_EV_CONN_BFRM, qc, frm);
+		BUG_ON(!(builder->mask & (1U << pkt->type)));
+	}
+
+	ret = qc_build_frm(frm, pos, end, qc);
+	if (!ret)
+		goto leave;
+
+	pkt->flags |= builder->flags;
 	ret = 1;
  leave:
 	TRACE_LEAVE(QUIC_EV_CONN_BFRM, qc);

@@ -66,6 +66,7 @@ extern void *__elf_aux_vector;
 #include <haproxy/api.h>
 #include <haproxy/applet.h>
 #include <haproxy/chunk.h>
+#include <haproxy/cli-t.h>
 #include <haproxy/compiler.h>
 #include <haproxy/dgram.h>
 #include <haproxy/global.h>
@@ -5808,6 +5809,151 @@ const void *resolve_dso_name(struct buffer *buf, const char *pfx, const void *ad
 	return NULL;
 }
 
+/* make a simplistic tar header (512 bytes) into output for file name <fname>
+ * of size <size> and mode <mode>. An optional prefix directory name can be
+ * passed in <pfx>, and an optional symlink destination may be passed in
+ * <link>. NULL is accepted for <pfx> and <link> if unused. Note that here we
+ * may abuse the link destination that is normally not used with regular files
+ * to place a magic.
+ */
+void make_tar_header(char *output, const char *pfx, const char *fname, const char *link, size_t size, mode_t mode)
+{
+	uint i, csum;
+
+	union {
+		uchar buffer[512];            /* raw data */
+		struct {                      /* byte offset */
+			char name[100];       /*   0 */
+			char mode[8];         /* 100 : octal */
+			char uid[8];          /* 108 : octal */
+			char gid[8];          /* 116 : octal */
+			char size[12];        /* 124 : octal */
+			char mtime[12];       /* 136 : octal */
+			char chksum[8];       /* 148 : sum of the header's bytes */
+			char typeflag;        /* 156 : '0' = regular file */
+			char linkname[100];   /* 157 */
+			char magic_ver[8];    /* 257 : "ustar  \0" or "ustar\0""00" */
+			char uname[32];       /* 265 */
+			char gname[32];       /* 297 */
+			char devmajor[8];     /* 329 */
+			char devminor[8];     /* 337 */
+			char prefix[155];     /* 345 */
+			char pad12[12];       /* 500 */
+		} hdr;
+	} blk = {
+		.hdr = {
+			.name  = "",
+			.mode  = "",
+			.uid   = "0000000",
+			.gid   = "0000000",
+			.size  = "00000000000",
+			.mtime = "00000000000",
+			.chksum = { ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ' },
+			.typeflag = '0',  // regular file
+			.magic_ver = { 'u', 's', 't', 'a', 'r', '\0', '0', '0' },
+			.uname = "root",
+			.gname = "root",
+			.devmajor = "0",
+			.devminor = "0",
+		},
+	};
+
+	strlcpy2(blk.hdr.linkname, link ? link : NULL, sizeof(blk.hdr.linkname));
+	strlcpy2(blk.hdr.prefix, pfx ? pfx : NULL, sizeof(blk.hdr.prefix));
+	strlcpy2(blk.hdr.name, fname, sizeof(blk.hdr.name));
+	snprintf(blk.hdr.size, sizeof(blk.hdr.size), "%llo", (ullong)size);
+	snprintf(blk.hdr.mode, sizeof(blk.hdr.mode), "%07o", (uint)mode & 0x1FFFFF);
+
+	/* cksum: 6 octal bytes followed by NUL then space. Computed with cksum
+	 * preset to 8 spaces.
+	 */
+	for (i = csum = 0; i < 512; i++)
+		csum += blk.buffer[i];
+
+	snprintf(blk.hdr.chksum, sizeof(blk.hdr.chksum), "%06o", csum);
+	memcpy(output, &blk, sizeof(blk));
+}
+
+/* appends file <input> into the tar file at location <storage> and size
+ * <size>. The file's location in the archive will appear at <pfx>/<fname>. If
+ * <pfx> is NULL, no prefix is inserted. Note that <pfx> must not end with a
+ * slash. If <fname> is NULL, then the basename of <input> is used. If <input>
+ * is NULL, then <fname> is used. The two may not be NULL simultaneously. An
+ * optional <link> tag (100 chars max) may be added if not NULL. The file's
+ * mode is set with just r/x depending on what was present, or zero in case of
+ * open error (so as to keep trace of the attempt to load the file). Returns 0
+ * on success, non-zero with errno set on error.
+ */
+int load_file_into_tar(char **storage, size_t *size, const char *pfx, const char *fname, const char *input, const char *link)
+{
+	size_t alloc_size;
+	ssize_t fsize = 0;
+	struct stat buf;
+	ssize_t ret = -1;
+	mode_t mode;
+	int fd = -1;
+	char *ptr;
+
+	if (!input)
+		input = fname;
+	else if (!fname) {
+		fname = strrchr(input, '/');
+		if (!fname++)
+			fname = input;
+	}
+
+	/* do not concatenate slashes */
+	if (*fname == '/')
+		fname++;
+
+	if (stat(input, &buf) != 0)
+		goto leave;
+
+	fsize = buf.st_size;
+
+	/* only keep read and exec */
+	mode = buf.st_mode;
+	if (mode & 0111)
+		mode |= 0111;
+	if (mode & 0444)
+		mode |= 0444;
+	mode &= 0555;
+
+	/* Open the file. In case of failure, we'll still create an entry of
+	 * size zero to indicate that we tried to read this file.
+	 */
+	fd = open(input, O_RDONLY);
+	if (fd < 0) {
+		fsize = 0;
+		mode = 0;
+	}
+
+	/* we need one 512B block for the header + as many 512B blocks as
+	 * needed for the file.
+	 */
+	alloc_size = (fsize + 512 + 511) & -512;
+	ptr = realloc(*storage, *size + alloc_size);
+	if (!ptr)
+		goto leave;
+
+	*storage = ptr;
+	ptr += *size;        // previous end
+	*size += alloc_size; // new end
+
+	make_tar_header(ptr, pfx, fname, link, fsize, mode);
+
+	ret = fsize ? read(fd, ptr + 512, fsize) : 0;
+	/* always pad with zeroes (complete of partial reads) */
+	if (ret < 0)
+		ret = 0;
+	memset(ptr + 512 + ret, 0, alloc_size - 512 - ret);
+
+ leave:
+	if (fd >= 0)
+		close(fd);
+	return ret == fsize ? 0 : 1;
+}
+
 /* On systems where this is supported, let's provide a possibility to enumerate
  * the list of object files. The output is appended to a buffer initialized by
  * the caller, with one name per line. A trailing zero is always emitted if data
@@ -5885,6 +6031,124 @@ int dump_libs(struct buffer *output, int with_addr)
 	dl_iterate_phdr(dl_dump_libs_cb, &ctx);
 	return output->data != old_data;
 }
+
+/* the private <data> we pass below is a dump context initialized like this */
+struct dl_collect_ctx {
+	char *storage;
+	size_t size;
+	char *prefix;
+	int pos;
+	char libpthread_path[PATH_MAX];
+};
+
+static int dl_collect_libs_cb(struct dl_phdr_info *info, size_t size, void *data)
+{
+	struct dl_collect_ctx *ctx = data;
+	const char *fname;
+
+	if (!info || !info->dlpi_name)
+		goto leave;
+
+	if (!*info->dlpi_name)
+		fname = get_exec_path();
+	else if (strchr(info->dlpi_name, '/'))
+		fname = info->dlpi_name;
+	else
+		/* else it's a VDSO or similar and we're not interested */
+		goto leave;
+
+	if (!fname)
+		goto leave;
+
+	load_file_into_tar(&ctx->storage, &ctx->size, ctx->prefix, fname, NULL, "haproxy-libs-dump");
+
+	/* try to load equivalent debug symbols for absolute paths  */
+	if (*fname == '/') {
+		char dbg[PATH_MAX];
+
+		snprintf(dbg, sizeof(dbg), "/usr/lib/debug%s", fname);
+		load_file_into_tar(&ctx->storage, &ctx->size, ctx->prefix, dbg, NULL, "haproxy-libs-dump");
+	}
+
+	/* check if we're loading libpthread or libc, and if so, keep a copy of its path */
+	if (!ctx->libpthread_path[0]) {
+		const char *basename = strrchr(fname, '/');
+
+		if (basename &&
+		    (strncmp(basename, "/libpthread.so", 14) == 0 ||
+		     strncmp(basename, "/libc.so", 8) == 0)) {
+			/* Note: this will trim the trailing slash */
+			strncpy(ctx->libpthread_path, fname,
+			        MIN(basename - fname, sizeof(ctx->libpthread_path)));
+		}
+	}
+ leave:
+	/* increment the object's number */
+	ctx->pos++;
+	return 0;
+}
+
+/* dumps lib names and optionally address ranges */
+void collect_libs(void)
+{
+	struct dl_collect_ctx ctx = { .storage = NULL, .size = 0, .pos = 0, .libpthread_path = "" };
+	const char *libthr_paths[] = { ctx.libpthread_path, "/usr/lib64", "/lib64", "/usr/lib", "/lib", NULL };
+	ulong pagesize = sysconf(_SC_PAGESIZE);
+	char dir_name[16];
+	size_t new_size;
+	void *page;
+	int i;
+
+	/* prepend a directory named after the starting pid */
+	snprintf(dir_name, sizeof(dir_name), "core-%u", getpid());
+	ctx.prefix = dir_name;
+
+	/* callbacks will (re-)allocate ctx->storage */
+	dl_iterate_phdr(dl_collect_libs_cb, &ctx);
+
+	/* if we've found libpthread, there's likely a libthread_db.so.1 next
+	 * to it, for use with gdb, and ctx.libpthread_path will point to it,
+	 * and with it, libthr_paths[0]. Otherwise we search in a few other
+	 * common paths.
+	 */
+	for (i = 0; libthr_paths[i]; i++) {
+		char path[PATH_MAX];
+
+		if (!*libthr_paths[i])
+			continue;
+
+		snprintf(path, sizeof(path), "%s/libthread_db.so.1", DISGUISE(libthr_paths[i]));
+		if (load_file_into_tar(&ctx.storage, &ctx.size, ctx.prefix, path, NULL, "haproxy-libs-dump") == 0)
+			break;
+	}
+
+	/* now that the archive is complete, we need to close it by appending
+	 * two empty 512B blocks. We'll also place it aligned in an isolated
+	 * mapped area so that it uses its own segment in a core dump for
+	 * easier locating. In order to do this, we'll allocate two extra
+	 * pages and will punch holes around.
+	 */
+	new_size = (ctx.size + 2*512 + 2*pagesize + pagesize - 1) & -pagesize;
+	page = mmap(NULL, new_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+	if (page != MAP_FAILED) {
+		/* punch holes around that won't go into the core */
+		mprotect(page, pagesize, PROT_NONE);
+		mprotect(page + new_size - pagesize, pagesize, PROT_NONE);
+		new_size -= 2*pagesize;
+		page += pagesize;
+		/* copy and make read-only */
+		memcpy(page, ctx.storage, ctx.size);
+		mprotect(page, lib_size, PROT_READ);
+		vma_set_name(page, new_size, "archive", "boot-libs");
+
+		lib_storage = page;
+		lib_size = new_size;
+	}
+
+	/* don't need the temporary storage anymore */
+	ha_free(&ctx.storage);
+}
 # else // no DL_ITERATE_PHDR
 #  error "No dump_libs() function for this platform"
 # endif
@@ -5894,6 +6158,11 @@ int dump_libs(struct buffer *output, int with_addr)
 int dump_libs(struct buffer *output, int with_addr)
 {
 	return 0;
+}
+
+/* unsupported platform: do not collect anything */
+void collect_libs(void)
+{
 }
 
 #endif // HA_HAVE_DUMP_LIBS
@@ -7501,6 +7770,76 @@ void ha_memset_s(void *s, int c, size_t n)
 	memset(s, c, n);
 	__asm__ __volatile__("" : : "r"(s) : "memory");
 }
+
+/* Optionally appends the thread execution context as a string to the output,
+ * prefixed with <pfx> and suffixed with <sfx> if not NULL and only when the
+ * context type is not TH_EX_CTX_NONE. Otherwise it does nothing and leaves the
+ * chunk untouched.
+ */
+void chunk_append_thread_ctx(struct buffer *output, const struct thread_exec_ctx *ctx, const char *pfx, const char *sfx)
+{
+	if (!ctx->type)
+		return;
+
+	chunk_appendf(output,"%s", pfx ? pfx : "");
+
+	switch (ctx->type) {
+	case TH_EX_CTX_INITCALL: {
+		const char *file = ctx->initcall->loc_file;
+		const char *slash = strrchr(file, '/');
+		slash = slash ? slash + 1 : file;
+		chunk_appendf(output,"ctx registered at %s:%d", slash, ctx->initcall->loc_line);
+		break;
+	}
+	case TH_EX_CTX_CALLER: {
+		const char *file = ctx->ha_caller->file;
+		const char *slash = strrchr(file, '/');
+		slash = slash ? slash + 1 : file;
+		chunk_appendf(output,"ctx registered at %s@%s:%d", ctx->ha_caller->func, slash, ctx->ha_caller->line);
+		break;
+	}
+	case TH_EX_CTX_SMPF:
+		chunk_appendf(output,"smpf kwl starting with '%s'", ctx->smpf_kwl->kw[0].kw);
+		break;
+	case TH_EX_CTX_CONV:
+		chunk_appendf(output,"conv kwl starting with '%s'", ctx->conv_kwl->kw[0].kw);
+		break;
+	case TH_EX_CTX_FUNC:
+		resolve_sym_name(output, "func '", ctx->pointer);
+		chunk_appendf(output,"'");
+		break;
+	case TH_EX_CTX_ACTION:
+		chunk_appendf(output,"act kwl starting with '%s'", ctx->action_kwl->kw[0].kw);
+		break;
+	case TH_EX_CTX_FLT:
+		chunk_appendf(output,"flt '%s'", ctx->flt_conf->id);
+		break;
+	case TH_EX_CTX_MUX:
+		chunk_appendf(output,"mux '%s'", ctx->mux_ops->name);
+		break;
+	case TH_EX_CTX_TASK:
+		resolve_sym_name(output, "task '", ctx->task);
+		chunk_appendf(output,"'");
+		break;
+	case TH_EX_CTX_APPLET:
+		chunk_appendf(output,"applet '%s'", ctx->applet->name);
+		break;
+	case TH_EX_CTX_CLI_KWL:
+		chunk_appendf(output,"cli kwl starting with '%s %s %s %s %s'",
+			      ctx->cli_kwl->kw[0].str_kw[0],
+			      ctx->cli_kwl->kw[0].str_kw[1] ? ctx->cli_kwl->kw[0].str_kw[1] : "",
+			      ctx->cli_kwl->kw[0].str_kw[2] ? ctx->cli_kwl->kw[0].str_kw[2] : "",
+			      ctx->cli_kwl->kw[0].str_kw[3] ? ctx->cli_kwl->kw[0].str_kw[3] : "",
+			      ctx->cli_kwl->kw[0].str_kw[4] ? ctx->cli_kwl->kw[0].str_kw[4] : "");
+		break;
+	default:
+		chunk_appendf(output,"other ctx %p", ctx->pointer);
+		break;
+	}
+
+	chunk_appendf(output,"%s", sfx ? sfx : "");
+}
+
 
 /*
  * Local variables:

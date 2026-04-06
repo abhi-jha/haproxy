@@ -451,6 +451,17 @@ void sample_register_fetches(struct sample_fetch_kw_list *kwl)
 		for (bit = 0; bit < SMP_SRC_ENTRIES; bit++)
 			if (sf->use & (1 << bit))
 				sf->val |= fetch_cap[bit];
+		/* store declaration file/line if known */
+		if (sf->exec_ctx.type)
+			continue;
+
+		if (caller_initcall) {
+			sf->exec_ctx.type = TH_EX_CTX_INITCALL;
+			sf->exec_ctx.initcall = caller_initcall;
+		} else {
+			sf->exec_ctx.type = TH_EX_CTX_SMPF;
+			sf->exec_ctx.smpf_kwl = kwl;
+		}
 	}
 	LIST_APPEND(&sample_fetches.list, &kwl->list);
 }
@@ -461,6 +472,21 @@ void sample_register_fetches(struct sample_fetch_kw_list *kwl)
  */
 void sample_register_convs(struct sample_conv_kw_list *pckl)
 {
+	struct sample_conv *sc;
+
+	/* store declaration file/line if known */
+	for (sc = pckl->kw; sc->kw != NULL; sc++) {
+		if (sc->exec_ctx.type)
+			continue;
+
+		if (caller_initcall) {
+			sc->exec_ctx.type = TH_EX_CTX_INITCALL;
+			sc->exec_ctx.initcall = caller_initcall;
+		} else {
+			sc->exec_ctx.type = TH_EX_CTX_CONV;
+			sc->exec_ctx.conv_kwl = pckl;
+		}
+	}
 	LIST_APPEND(&sample_convs.list, &pckl->list);
 }
 
@@ -1337,8 +1363,8 @@ int sample_process_cnv(struct sample_expr *expr, struct sample *p)
 		}
 
 		/* OK cast succeeded */
-
-		if (!conv_expr->conv->process(conv_expr->arg_p, p, conv_expr->conv->private))
+		if (!EXEC_CTX_WITH_RET(conv_expr->conv->exec_ctx,
+		                       conv_expr->conv->process(conv_expr->arg_p, p, conv_expr->conv->private)))
 			return 0;
 	}
 	return 1;
@@ -1378,7 +1404,8 @@ struct sample *sample_process(struct proxy *px, struct session *sess,
 	}
 
 	smp_set_owner(p, px, sess, strm, opt);
-	if (!expr->fetch->process(expr->arg_p, p, expr->fetch->kw, expr->fetch->private))
+	if (!EXEC_CTX_WITH_RET(expr->fetch->exec_ctx,
+	                       expr->fetch->process(expr->arg_p, p, expr->fetch->kw, expr->fetch->private)))
 		return NULL;
 
 	if (!sample_process_cnv(expr, p))
@@ -1512,6 +1539,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 				break;
 			}
 
+			/* TODO CLI set-var should not prevent server deletion as var value is instantly resolved. */
 			srv->flags |= SRV_F_NON_PURGEABLE;
 
 			chunk_destroy(&arg->data.str);
@@ -1541,6 +1569,9 @@ int smp_resolve_args(struct proxy *p, char **err)
 				break;
 			}
 
+			/* TODO CLI set-var should not prevent proxy deletion as var value is instantly resolved. */
+			px->flags |= PR_FL_NON_PURGEABLE;
+
 			chunk_destroy(&arg->data.str);
 			arg->unresolved = 0;
 			arg->data.prx = px;
@@ -1567,6 +1598,9 @@ int smp_resolve_args(struct proxy *p, char **err)
 				cfgerr++;
 				break;
 			}
+
+			/* TODO CLI set-var should not prevent proxy deletion as var value is instantly resolved. */
+			px->flags |= PR_FL_NON_PURGEABLE;
 
 			chunk_destroy(&arg->data.str);
 			arg->unresolved = 0;
@@ -4788,9 +4822,10 @@ static int sample_conv_jwt_member_query(const struct arg *args, struct sample *s
 	int retval = 0;
 	int ret;
 
-	jwt_tokenize(&smp->data.u.str, items, &item_num);
-
-	if (item_num < member + 1)
+	/* We don't need to extract all the parts from the token, we only need a
+	 * specific one.
+	 */
+	if (jwt_tokenize(&smp->data.u.str, items, item_num) < 0)
 		goto end;
 
 	decoded_header = get_trash_chunk_sz(items[member].length);
@@ -5536,7 +5571,7 @@ static int smp_fetch_bytes(const struct arg *args, struct sample *smp, const cha
 
 	if (kw[2] == 'q') /* req.bytes_in or req.bytes_out */
 		smp->data.u.sint = (kw[10] == 'i') ? logs->req_in : logs->req_out;
-	if (kw[2] == 's') /* res.bytes_in or res.bytes_out */
+	else if (kw[2] == 's') /* res.bytes_in or res.bytes_out */
 		smp->data.u.sint = (kw[10] == 'i') ? logs->res_in : logs->res_out;
 	else /* bytes_in or bytes_out */
 		smp->data.u.sint = (kw[6] == 'i') ? logs->req_in : logs->res_in;

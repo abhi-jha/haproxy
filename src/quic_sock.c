@@ -23,6 +23,7 @@
 #include <haproxy/api.h>
 #include <haproxy/buf.h>
 #include <haproxy/connection.h>
+#include <haproxy/counters.h>
 #include <haproxy/dynbuf.h>
 #include <haproxy/fd.h>
 #include <haproxy/global-t.h>
@@ -38,10 +39,10 @@
 #include <haproxy/quic_conn.h>
 #include <haproxy/quic_rx.h>
 #include <haproxy/quic_sock.h>
+#include <haproxy/quic_stats.h>
 #include <haproxy/quic_tp-t.h>
 #include <haproxy/quic_trace.h>
 #include <haproxy/session.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/task.h>
 #include <haproxy/trace.h>
 #include <haproxy/tools.h>

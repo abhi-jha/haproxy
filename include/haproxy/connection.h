@@ -34,6 +34,7 @@
 #include <haproxy/listener-t.h>
 #include <haproxy/obj_type.h>
 #include <haproxy/pool-t.h>
+#include <haproxy/protocol.h>
 #include <haproxy/server.h>
 #include <haproxy/session-t.h>
 #include <haproxy/task-t.h>
@@ -48,6 +49,13 @@ extern struct mux_proto_list mux_proto_list;
 extern struct mux_stopping_data mux_stopping_data[MAX_THREADS];
 
 #define IS_HTX_CONN(conn) ((conn)->mux && ((conn)->mux->flags & MX_FL_HTX))
+
+/* macros to switch the calling context to the mux during a call. There's one
+ * with a return value for most calls, and one without for the few like shut(),
+ * detach() or destroy() with no return.
+ */
+#define CALL_MUX_WITH_RET(mux, func) EXEC_CTX_WITH_RET(EXEC_CTX_MAKE(TH_EX_CTX_MUX, (mux)), (mux)->func)
+#define CALL_MUX_NO_RET(mux, func)   EXEC_CTX_NO_RET(EXEC_CTX_MAKE(TH_EX_CTX_MUX, (mux)), (mux)->func)
 
 /* receive a PROXY protocol header over a connection */
 int conn_recv_proxy(struct connection *conn, int flag);
@@ -480,7 +488,7 @@ static inline int conn_install_mux(struct connection *conn, const struct mux_ops
 
 	conn->mux = mux;
 	conn->ctx = ctx;
-	ret = mux->init ? mux->init(conn, prx, sess, &BUF_NULL) : 0;
+	ret = mux->init ? CALL_MUX_WITH_RET(mux, init(conn, prx, sess, &BUF_NULL)) : 0;
 	if (ret < 0) {
 		conn->mux = NULL;
 		conn->ctx = NULL;
@@ -602,13 +610,13 @@ void list_mux_proto(FILE *out);
  */
 static inline const struct mux_proto_list *conn_get_best_mux_entry(
         const struct ist mux_proto,
-        int proto_side, int proto_mode)
+        int proto_side, int proto_is_quic, int proto_mode)
 {
 	struct mux_proto_list *item;
 	struct mux_proto_list *fallback = NULL;
 
 	list_for_each_entry(item, &mux_proto_list.list, list) {
-		if (!(item->side & proto_side) || !(item->mode & proto_mode))
+		if (!(item->side & proto_side) || !(item->mode & proto_mode) || (proto_is_quic && !(item->mux->flags & MX_FL_FRAMED)))
 			continue;
 		if (istlen(mux_proto) && isteq(mux_proto, item->token))
 			return item;
@@ -633,7 +641,7 @@ static inline const struct mux_ops *conn_get_best_mux(struct connection *conn,
 {
 	const struct mux_proto_list *item;
 
-	item = conn_get_best_mux_entry(mux_proto, proto_side, proto_mode);
+	item = conn_get_best_mux_entry(mux_proto, proto_side, proto_is_quic(conn->ctrl), proto_mode);
 
 	return item ? item->mux : NULL;
 }
@@ -681,6 +689,12 @@ static inline struct ssl_sock_ctx *conn_get_ssl_sock_ctx(struct connection *conn
 static inline int conn_is_ssl(struct connection *conn)
 {
 	return !!conn_get_ssl_sock_ctx(conn);
+}
+
+/* Returns true if connection runs over QUIC. */
+static inline int conn_is_quic(const struct connection *conn)
+{
+	return conn->flags & CO_FL_FDLESS;
 }
 
 /* Returns true if connection must be reversed. */

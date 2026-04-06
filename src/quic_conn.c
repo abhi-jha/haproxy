@@ -38,8 +38,6 @@
 #include <haproxy/freq_ctr.h>
 #include <haproxy/frontend.h>
 #include <haproxy/global.h>
-#include <haproxy/h3.h>
-#include <haproxy/hq_interop.h>
 #include <haproxy/log.h>
 #include <haproxy/mux_quic.h>
 #include <haproxy/ncbuf.h>
@@ -269,18 +267,19 @@ void quic_set_tls_alert(struct quic_conn *qc, int alert)
 	TRACE_LEAVE(QUIC_EV_CONN_SSLALERT, qc);
 }
 
-/* Set the application for <qc> QUIC connection.
- * Return 1 if succeeded, 0 if not.
+/* Register the negotiated TLS ALPN <alpn> of length <alpn_len> for <qc> QUIC
+ * connection. This checks that the protocol is compatible with the QUIC stack.
+ *
+ * Returns 1 on success else 0.
  */
-int quic_set_app_ops(struct quic_conn *qc, const unsigned char *alpn, size_t alpn_len)
+int qc_register_alpn(struct quic_conn *qc, const char *alpn, int alpn_len)
 {
-	if (alpn_len >= 2 && memcmp(alpn, "h3", 2) == 0)
-		qc->app_ops = &h3_ops;
-	else if (alpn_len >= 10 && memcmp(alpn, "hq-interop", 10) == 0)
-		qc->app_ops = &hq_interop_ops;
-	else
+	const struct qcc_app_ops *app_ops;
+
+	if (!(app_ops = quic_alpn_to_app_ops(alpn, alpn_len)))
 		return 0;
 
+	qc->alpn = app_ops->alpn;
 	return 1;
 }
 
@@ -288,14 +287,14 @@ int quic_set_app_ops(struct quic_conn *qc, const unsigned char *alpn, size_t alp
  * Return 1 if succeeded, 0 if not.
  */
 int quic_reuse_srv_params(struct quic_conn *qc,
-                          const unsigned char *alpn,
+                          const char *alpn,
                           const struct quic_early_transport_params *etps)
 {
 	int ret = 0;
 
 	TRACE_ENTER(QUIC_EV_CONN_NEW, qc);
 
-	if (!alpn || !quic_set_app_ops(qc, alpn, strlen((char *)alpn)))
+	if (!alpn || !qc_register_alpn(qc, alpn, strlen(alpn)))
 		goto err;
 
 	qc_early_transport_params_reuse(qc, &qc->tx.params, etps);
@@ -373,61 +372,6 @@ void quic_conn_closed_err_count_inc(struct quic_conn *qc, struct quic_frame *frm
 
  out:
 	TRACE_LEAVE(QUIC_EV_CONN_CLOSE, qc);
-}
-
-/* Cancel a request on connection <qc> for stream id <id>. This is useful when
- * the client opens a new stream but the MUX has already been released. A
- * STOP_SENDING + RESET_STREAM frames are prepared for emission.
- *
- * TODO this function is closely related to H3. Its place should be in H3 layer
- * instead of quic-conn but this requires an architecture adjustment.
- *
- * Returns 1 on success else 0.
- */
-int qc_h3_request_reject(struct quic_conn *qc, uint64_t id)
-{
-	int ret = 0;
-	struct quic_frame *ss, *rs;
-	struct quic_enc_level *qel = qc->ael;
-	const uint64_t app_error_code = H3_ERR_REQUEST_REJECTED;
-
-	TRACE_ENTER(QUIC_EV_CONN_PRSHPKT, qc);
-
-	/* Do not emit rejection for unknown unidirectional stream as it is
-	 * forbidden to close some of them (H3 control stream and QPACK
-	 * encoder/decoder streams).
-	 */
-	if (quic_stream_is_uni(id)) {
-		ret = 1;
-		goto out;
-	}
-
-	ss = qc_frm_alloc(QUIC_FT_STOP_SENDING);
-	if (!ss) {
-		TRACE_ERROR("failed to allocate quic_frame", QUIC_EV_CONN_PRSHPKT, qc);
-		goto out;
-	}
-
-	ss->stop_sending.id = id;
-	ss->stop_sending.app_error_code = app_error_code;
-
-	rs = qc_frm_alloc(QUIC_FT_RESET_STREAM);
-	if (!rs) {
-		TRACE_ERROR("failed to allocate quic_frame", QUIC_EV_CONN_PRSHPKT, qc);
-		qc_frm_free(qc, &ss);
-		goto out;
-	}
-
-	rs->reset_stream.id = id;
-	rs->reset_stream.app_error_code = app_error_code;
-	rs->reset_stream.final_size = 0;
-
-	LIST_APPEND(&qel->pktns->tx.frms, &ss->list);
-	LIST_APPEND(&qel->pktns->tx.frms, &rs->list);
-	ret = 1;
- out:
-	TRACE_LEAVE(QUIC_EV_CONN_PRSHPKT, qc);
-	return ret;
 }
 
 /* Remove a <qc> quic-conn from its ha_thread_ctx list. If <closing> is true,
@@ -1182,6 +1126,7 @@ struct quic_conn *qc_new_conn(void *target,
 	LIST_INIT(&qc->rx.pkt_list);
 
 	qc->streams_by_id = EB_ROOT_UNIQUE;
+	qc->alpn = NULL;
 
 	/* Required to call free_quic_conn_cids() from quic_conn_release() */
 	qc->cids = NULL;
@@ -1201,7 +1146,7 @@ struct quic_conn *qc_new_conn(void *target,
 	qc->xprt_ctx = NULL;
 	qc->conn = conn;
 	qc->qcc = NULL;
-	qc->app_ops = NULL;
+	qc->strm_reject = NULL;
 	qc->path = NULL;
 
 	/* Keyupdate: required to safely call quic_tls_ku_free() from

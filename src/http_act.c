@@ -20,6 +20,7 @@
 #include <haproxy/action.h>
 #include <haproxy/api.h>
 #include <haproxy/arg.h>
+#include <haproxy/base64.h>
 #include <haproxy/capture-t.h>
 #include <haproxy/cfgparse.h>
 #include <haproxy/chunk.h>
@@ -50,6 +51,7 @@ static void release_http_action(struct act_rule *rule)
 	if (rule->arg.http.re)
 		regex_free(rule->arg.http.re);
 	lf_expr_deinit(&rule->arg.http.fmt);
+	release_sample_expr(rule->arg.http.expr);
 }
 
 /* Release memory allocated by HTTP actions relying on an http reply. Concretely,
@@ -1479,6 +1481,86 @@ static enum act_return http_action_set_header(struct act_rule *rule, struct prox
 	goto leave;
 }
 
+/* This function executes a set-headers-bin or add-headers-bin actions.
+ */
+
+static enum act_return http_action_set_headers_bin(struct act_rule *rule, struct proxy *px,
+						  struct session *sess, struct stream *s, int flags)
+{
+	struct http_msg *msg = ((rule->from == ACT_F_HTTP_REQ) ? &s->txn->req : &s->txn->rsp);
+	struct htx *htx = htxbuf(&msg->chn->buf);
+	struct sample *hdrs_bin;
+	char *p, *end;
+	enum act_return ret = ACT_RET_CONT;
+	struct http_hdr_ctx ctx;
+	struct ist n, v;
+	uint64_t sz = 0;
+
+	hdrs_bin = sample_fetch_as_type(px, sess, s, SMP_OPT_FINAL, rule->arg.http.expr, SMP_T_BIN);
+	if (!hdrs_bin)
+		return ACT_RET_CONT;
+
+	p = b_orig(&hdrs_bin->data.u.str);
+	end = b_tail(&hdrs_bin->data.u.str);
+	while (p < end) {
+		if (decode_varint(&p, end, &sz) == -1)
+			goto fail_rewrite;
+		if (!sz) {
+			if (decode_varint(&p, end, &sz) == -1 || sz > 0)
+				goto fail_rewrite;
+			goto leave;
+		}
+
+		n = ist2(p, sz);
+		p += sz;
+
+		if (decode_varint(&p, end, &sz) == -1)
+			goto fail_rewrite;
+
+		v = ist2(p, sz);
+		p += sz;
+
+		if (istlen(rule->arg.http.str) && !istmatch(n, rule->arg.http.str))
+			continue;
+
+		if (is_immutable_header(n))
+			continue;
+
+		if (rule->action == 0) { // set-header
+			/* remove all occurrences of the header */
+			ctx.blk = NULL;
+			while (http_find_header(htx, n, &ctx, 1))
+				http_remove_header(htx, &ctx);
+		}
+
+		/* Now add header */
+		if (!http_add_header(htx, n, v))
+			goto fail_rewrite;
+	}
+
+	/* invalid encoding */
+	ret = ACT_RET_ERR;
+
+  leave:
+	return ret;
+
+  fail_rewrite:
+	if (sess->fe_tgcounters)
+		_HA_ATOMIC_INC(&sess->fe_tgcounters->failed_rewrites);
+	if ((s->flags & SF_BE_ASSIGNED) && s->be_tgcounters)
+		_HA_ATOMIC_INC(&s->be_tgcounters->failed_rewrites);
+	if (sess->li_tgcounters)
+		_HA_ATOMIC_INC(&sess->li_tgcounters->failed_rewrites);
+	if (s->sv_tgcounters)
+		_HA_ATOMIC_INC(&s->sv_tgcounters->failed_rewrites);
+
+	if (!(msg->flags & HTTP_MSGF_SOFT_RW)) {
+		ret = ACT_RET_ERR;
+		if (!(s->flags & SF_ERR_MASK))
+			s->flags |= SF_ERR_PRXCOND;
+	}
+	goto leave;
+}
 /* Parse a "set-header", "add-header" or "early-hint" actions. It takes an
  * header name and a log-format string as arguments. It returns ACT_RET_PRS_OK
  * on success, ACT_RET_PRS_ERR on error.
@@ -1554,6 +1636,64 @@ static enum act_parse_ret parse_http_set_header(const char **args, int *orig_arg
 	}
 
 	*orig_arg = cur_arg + 1;
+	return ACT_RET_PRS_OK;
+}
+
+/* Parse set-headers-bin */
+static enum act_parse_ret parse_http_set_headers_bin(const char **args, int *orig_arg, struct proxy *px,
+						   struct act_rule *rule, char **err)
+{
+	struct sample_expr *expr;
+	unsigned int where;
+	int cur_arg;
+
+	if (args[*orig_arg-1][0] == 's')
+		rule->action = 0; // set-header
+	else
+		rule->action = 1; // add-header
+	rule->action_ptr = http_action_set_headers_bin;
+	rule->release_ptr = release_http_action;
+	lf_expr_init(&rule->arg.http.fmt);
+
+	cur_arg = *orig_arg;
+	if (!*args[cur_arg]) {
+		memprintf(err, "expects exactly one argument or three arguments <headers> prefix <pfx>");
+		return ACT_RET_PRS_ERR;
+	}
+
+	expr = sample_parse_expr((char **)args, &cur_arg, px->conf.args.file, px->conf.args.line,
+				 err, &px->conf.args, NULL);
+	if (!expr)
+		return ACT_RET_PRS_ERR;
+
+	where = 0;
+	if (px->cap & PR_CAP_FE)
+		where |= (rule->from == ACT_F_HTTP_REQ ? SMP_VAL_FE_HRQ_HDR : SMP_VAL_FE_HRS_HDR);
+	if (px->cap & PR_CAP_BE)
+		where |= (rule->from == ACT_F_HTTP_REQ ? SMP_VAL_BE_HRQ_HDR : SMP_VAL_BE_HRS_HDR);
+
+	if (!(expr->fetch->val & where)) {
+		memprintf(err, "fetch method '%s' extracts information from '%s', none of which is available here",
+			  args[cur_arg-1], sample_src_names(expr->fetch->use));
+		release_sample_expr(expr);
+		return ACT_RET_PRS_ERR;
+	}
+
+	/* Check if an argument is available */
+	if (strcmp(args[cur_arg], "prefix") == 0 ) {
+		cur_arg++;
+		if(!*args[cur_arg]) {
+			memprintf(err, "expects 1 argument: <headers>; or 3 arguments: <headers> prefix <pfx>");
+			release_sample_expr(expr);
+			return ACT_RET_PRS_ERR;
+		}
+		rule->arg.http.str = ist(strdup(args[cur_arg]));
+		cur_arg++;
+	}
+
+	rule->arg.http.expr = expr;
+
+	*orig_arg = cur_arg;
 	return ACT_RET_PRS_OK;
 }
 
@@ -1767,6 +1907,166 @@ static enum act_parse_ret parse_http_del_header(const char **args, int *orig_arg
 	return ACT_RET_PRS_OK;
 }
 
+/* This function executes a del-headers-bin action with selected matching mode for
+ * header name. It finds the matching method to be performed in <.action>, previously
+ * filled by function parse_http_del_headers_bin(). On success, it returns ACT_RET_CONT.
+ * Otherwise ACT_RET_ERR is returned.
+ */
+static enum act_return http_action_del_headers_bin(struct act_rule *rule, struct proxy *px,
+						  struct session *sess, struct stream *s, int flags)
+{
+	struct http_hdr_ctx ctx;
+	struct http_msg *msg = ((rule->from == ACT_F_HTTP_REQ) ? &s->txn->req : &s->txn->rsp);
+	struct htx *htx = htxbuf(&msg->chn->buf);
+	struct sample *hdrs_bin;
+	char *p, *end;
+	enum act_return ret = ACT_RET_CONT;
+	struct ist n;
+	uint64_t sz = 0;
+
+	hdrs_bin = sample_fetch_as_type(px, sess, s, SMP_OPT_FINAL, rule->arg.http.expr, SMP_T_BIN);
+	if (!hdrs_bin)
+		return ACT_RET_CONT;
+
+	p = b_orig(&hdrs_bin->data.u.str);
+	end = b_tail(&hdrs_bin->data.u.str);
+	while (p < end) {
+		if (decode_varint(&p, end, &sz) == -1)
+			goto fail_rewrite;
+		if (!sz)
+			goto leave;
+
+		n = ist2(p, sz);
+		p += sz;
+
+		if (is_immutable_header(n))
+			continue;
+
+		/* remove all occurrences of the header */
+		ctx.blk = NULL;
+		switch (rule->action) {
+		case PAT_MATCH_STR:
+			while (http_find_header(htx, n, &ctx, 1))
+				http_remove_header(htx, &ctx);
+			break;
+		case PAT_MATCH_BEG:
+			while (http_find_pfx_header(htx, n, &ctx, 1))
+				http_remove_header(htx, &ctx);
+			break;
+		case PAT_MATCH_END:
+			while (http_find_sfx_header(htx, n, &ctx, 1))
+				http_remove_header(htx, &ctx);
+			break;
+		case PAT_MATCH_SUB:
+			while (http_find_sub_header(htx, n, &ctx, 1))
+				http_remove_header(htx, &ctx);
+			break;
+		default:
+			goto fail_rewrite;
+		}
+	}
+
+	/* invalid encoding */
+	ret = ACT_RET_ERR;
+
+  leave:
+	return ret;
+
+  fail_rewrite:
+	if (sess->fe_tgcounters)
+		_HA_ATOMIC_INC(&sess->fe_tgcounters->failed_rewrites);
+	if ((s->flags & SF_BE_ASSIGNED) && s->be_tgcounters)
+		_HA_ATOMIC_INC(&s->be_tgcounters->failed_rewrites);
+	if (sess->li_tgcounters)
+		_HA_ATOMIC_INC(&sess->li_tgcounters->failed_rewrites);
+	if (s->sv_tgcounters)
+		_HA_ATOMIC_INC(&s->sv_tgcounters->failed_rewrites);
+
+	if (!(msg->flags & HTTP_MSGF_SOFT_RW)) {
+		ret = ACT_RET_ERR;
+		if (!(s->flags & SF_ERR_MASK))
+			s->flags |= SF_ERR_PRXCOND;
+	}
+	goto leave;
+}
+
+/* Parse a "del-headers-bin" action. It takes string as a required argument,
+ * optional flag (currently only -m) and optional matching method of input string
+ * with header name to be deleted. Default matching method is exact match (-m str).
+ * It returns ACT_RET_PRS_OK on success, ACT_RET_PRS_ERR on error.
+ */
+static enum act_parse_ret parse_http_del_headers_bin(const char **args, int *orig_arg, struct proxy *px,
+						struct act_rule *rule, char **err)
+{
+	struct sample_expr *expr;
+	unsigned int where;
+	int cur_arg;
+	int pat_idx;
+
+	/* set exact matching (-m str) as default */
+	rule->action = PAT_MATCH_STR;
+	rule->action_ptr = http_action_del_headers_bin;
+	rule->release_ptr = release_http_action;
+	lf_expr_init(&rule->arg.http.fmt);
+
+	cur_arg = *orig_arg;
+	if (!*args[cur_arg]) {
+		memprintf(err, "expects at least 1 argument");
+		return ACT_RET_PRS_ERR;
+	}
+
+	expr = sample_parse_expr((char **)args, &cur_arg, px->conf.args.file, px->conf.args.line,
+				 err, &px->conf.args, NULL);
+	if (!expr)
+		return ACT_RET_PRS_ERR;
+
+	where = 0;
+	if (px->cap & PR_CAP_FE)
+		where |= (rule->from == ACT_F_HTTP_REQ ? SMP_VAL_FE_HRQ_HDR : SMP_VAL_FE_HRS_HDR);
+	if (px->cap & PR_CAP_BE)
+		where |= (rule->from == ACT_F_HTTP_REQ ? SMP_VAL_BE_HRQ_HDR : SMP_VAL_BE_HRS_HDR);
+
+	if (!(expr->fetch->val & where)) {
+		memprintf(err, "fetch method '%s' extracts information from '%s', none of which is available here",
+			  args[cur_arg-1], sample_src_names(expr->fetch->use));
+		release_sample_expr(expr);
+		return ACT_RET_PRS_ERR;
+	}
+
+	if (strcmp(args[cur_arg], "-m") == 0) {
+		cur_arg++;
+		if (!*args[cur_arg]) {
+			memprintf(err, "-m flag expects exactly 1 argument");
+			release_sample_expr(expr);
+			return ACT_RET_PRS_ERR;
+		}
+
+		pat_idx = pat_find_match_name(args[cur_arg]);
+		switch (pat_idx) {
+		case PAT_MATCH_REG:
+			memprintf(err, "-m reg with is unsupported with del-header-bin due to performance reasons");
+			release_sample_expr(expr);
+			return ACT_RET_PRS_ERR;
+		case PAT_MATCH_STR:
+		case PAT_MATCH_BEG:
+		case PAT_MATCH_END:
+		case PAT_MATCH_SUB:
+			rule->action = pat_idx;
+			break;
+		default:
+			memprintf(err, "-m with unsupported matching method '%s'", args[cur_arg]);
+			release_sample_expr(expr);
+			return ACT_RET_PRS_ERR;
+		}
+		cur_arg++;
+	}
+
+	rule->arg.http.expr = expr;
+
+	*orig_arg = cur_arg;
+	return ACT_RET_PRS_OK;
+}
+
 /* This function executes a pause action.
  */
 static enum act_return http_action_pause(struct act_rule *rule, struct proxy *px,
@@ -1828,7 +2128,7 @@ static enum act_parse_ret parse_http_pause(const char **args, int *orig_arg, str
                 rule->arg.timeout.expr = sample_parse_expr((char **)args, &cur_arg, px->conf.args.file,
                                                            px->conf.args.line, err, &px->conf.args, NULL);
                 if (!rule->arg.timeout.expr) {
-                        memprintf(err, "unexpected character '%c' in rule 'mause'", *res);
+                        memprintf(err, "unexpected character '%c' in rule 'pause'", *res);
                         return ACT_RET_PRS_ERR;
                 }
         }
@@ -2530,11 +2830,13 @@ static struct action_kw_list http_req_actions = {
 	.kw = {
 		{ "add-acl",          parse_http_set_map,              KWF_MATCH_PREFIX },
 		{ "add-header",       parse_http_set_header,           0 },
+		{ "add-headers-bin",  parse_http_set_headers_bin,      0 },
 		{ "allow",            parse_http_allow,                0 },
 		{ "auth",             parse_http_auth,                 0 },
 		{ "capture",          parse_http_req_capture,          0 },
 		{ "del-acl",          parse_http_set_map,              KWF_MATCH_PREFIX },
 		{ "del-header",       parse_http_del_header,           0 },
+		{ "del-headers-bin",  parse_http_del_headers_bin,      0 },
 		{ "del-map",          parse_http_set_map,              KWF_MATCH_PREFIX },
 		{ "deny",             parse_http_deny,                 0 },
 		{ "disable-l7-retry", parse_http_req_disable_l7_retry, 0 },
@@ -2551,6 +2853,7 @@ static struct action_kw_list http_req_actions = {
 		{ "replace-value",    parse_http_replace_header,       0 },
 		{ "return",           parse_http_return,               0 },
 		{ "set-header",       parse_http_set_header,           0 },
+		{ "set-headers-bin",  parse_http_set_headers_bin,      0 },
 		{ "set-map",          parse_http_set_map,              KWF_MATCH_PREFIX },
 		{ "set-method",       parse_set_req_line,              0 },
 		{ "set-path",         parse_set_req_line,              0 },
@@ -2572,10 +2875,12 @@ static struct action_kw_list http_res_actions = {
 	.kw = {
 		{ "add-acl",         parse_http_set_map,        KWF_MATCH_PREFIX },
 		{ "add-header",      parse_http_set_header,     0 },
+		{ "add-headers-bin", parse_http_set_headers_bin,0 },
 		{ "allow",           parse_http_allow,          0 },
 		{ "capture",         parse_http_res_capture,    0 },
 		{ "del-acl",         parse_http_set_map,        KWF_MATCH_PREFIX },
 		{ "del-header",      parse_http_del_header,     0 },
+		{ "del-headers-bin", parse_http_del_headers_bin,0 },
 		{ "del-map",         parse_http_set_map,        KWF_MATCH_PREFIX },
 		{ "deny",            parse_http_deny,           0 },
 		{ "do-log",          parse_http_res_do_log,     0 },
@@ -2585,6 +2890,7 @@ static struct action_kw_list http_res_actions = {
 		{ "replace-value",   parse_http_replace_header, 0 },
 		{ "return",          parse_http_return,         0 },
 		{ "set-header",      parse_http_set_header,     0 },
+		{ "set-headers-bin", parse_http_set_headers_bin,0 },
 		{ "set-map",         parse_http_set_map,        KWF_MATCH_PREFIX },
 		{ "set-status",      parse_http_set_status,     0 },
 		{ "strict-mode",     parse_http_strict_mode,    0 },
@@ -2600,15 +2906,18 @@ INITCALL1(STG_REGISTER, http_res_keywords_register, &http_res_actions);
 static struct action_kw_list http_after_res_actions = {
 	.kw = {
 		{ "add-header",      parse_http_set_header,     0 },
+		{ "add-headers-bin", parse_http_set_headers_bin,0 },
 		{ "allow",           parse_http_allow,          0 },
 		{ "capture",         parse_http_res_capture,    0 },
 		{ "del-acl",          parse_http_set_map,       KWF_MATCH_PREFIX },
 		{ "del-header",      parse_http_del_header,     0 },
+		{ "del-headers-bin", parse_http_del_headers_bin,0 },
 		{ "del-map",          parse_http_set_map,       KWF_MATCH_PREFIX },
 		{ "do-log",          parse_http_after_res_do_log, 0 },
 		{ "replace-header",  parse_http_replace_header, 0 },
 		{ "replace-value",   parse_http_replace_header, 0 },
 		{ "set-header",      parse_http_set_header,     0 },
+		{ "set-headers-bin", parse_http_set_headers_bin,0 },
 		{ "set-map",         parse_http_set_map,        KWF_MATCH_PREFIX },
 		{ "set-status",      parse_http_set_status,     0 },
 		{ "strict-mode",     parse_http_strict_mode,    0 },

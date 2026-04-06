@@ -207,11 +207,18 @@ struct flt_ops {
  * accessible from a filter when instantiated in a stream
  */
 struct flt_conf {
+	const char     *name; /* The filter name (same name used to select the filter from config) */
 	const char     *id;   /* The filter id */
 	struct flt_ops *ops;  /* The filter callbacks */
 	void           *conf; /* The filter configuration */
 	struct list     list; /* Next filter for the same proxy */
 	unsigned int    flags; /* FLT_CFG_FL_* */
+};
+
+struct filter_sequence_elt {
+	char *flt_name; /* filter name (set during parsing) */
+	struct flt_conf *flt_conf; /* associated filter conf (set after parsing) */
+	struct list list; /* list element */
 };
 
 /*

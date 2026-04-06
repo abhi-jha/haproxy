@@ -590,12 +590,13 @@ int stats_dump_stat_to_buffer(struct stconn *sc, struct buffer *buf, struct htx 
 				goto full;
 		}
 
-		if (domain == STATS_DOMAIN_PROXY)
-			ctx->obj1 = proxies_list;
-
 		ctx->px_st = STAT_PX_ST_INIT;
 		ctx->field = 0;
 		ctx->state = STAT_STATE_LIST;
+		/* Update ctx->obj1 via watcher to point on the first proxy. */
+		if (domain == STATS_DOMAIN_PROXY)
+			watcher_attach(&ctx->px_watch, proxies_list);
+
 		__fallthrough;
 
 	case STAT_STATE_LIST:
@@ -944,6 +945,8 @@ static int cli_parse_show_stat(char **args, char *payload, struct appctx *appctx
 	ctx->scope_len = 0;
 	ctx->http_px = NULL; // not under http context
 	ctx->flags = STAT_F_SHNODE | STAT_F_SHDESC;
+
+	watcher_init(&ctx->px_watch,  &ctx->obj1, offsetof(struct proxy, watcher_list));
 	watcher_init(&ctx->srv_watch, &ctx->obj2, offsetof(struct server, watcher_list));
 
 	if ((strm_li(appctx_strm(appctx))->bind_conf->level & ACCESS_LVL_MASK) >= ACCESS_LVL_OPER)
@@ -1028,8 +1031,12 @@ static int cli_io_handler_dump_stat(struct appctx *appctx)
 static void cli_io_handler_release_stat(struct appctx *appctx)
 {
 	struct show_stat_ctx *ctx = appctx->svcctx;
-	if (ctx->px_st == STAT_PX_ST_SV && ctx->obj2)
-		watcher_detach(&ctx->srv_watch);
+
+	if (ctx->state == STAT_STATE_LIST && ctx->domain == STATS_DOMAIN_PROXY) {
+		watcher_detach(&ctx->px_watch);
+		if (ctx->px_st == STAT_PX_ST_SV)
+			watcher_detach(&ctx->srv_watch);
+	}
 }
 
 static int cli_io_handler_dump_json_schema(struct appctx *appctx)
@@ -1089,16 +1096,21 @@ static int cli_io_handler_dump_stat_file(struct appctx *appctx)
 static void cli_io_handler_release_dump_stat_file(struct appctx *appctx)
 {
 	struct show_stat_ctx *ctx = appctx->svcctx;
-	if (ctx->px_st == STAT_PX_ST_SV && ctx->obj2)
-		watcher_detach(&ctx->srv_watch);
+
+	if (ctx->state == STAT_STATE_LIST && ctx->domain == STATS_DOMAIN_PROXY) {
+		watcher_detach(&ctx->px_watch);
+		if (ctx->px_st == STAT_PX_ST_SV)
+			watcher_detach(&ctx->srv_watch);
+	}
 }
 
 int stats_allocate_proxy_counters_internal(struct extra_counters **counters,
-                                           int type, int px_cap)
+                                           int type, int px_cap,
+                                           char **storage, size_t step)
 {
 	struct stats_module *mod;
 
-	EXTRA_COUNTERS_REGISTER(counters, type, alloc_failed);
+	EXTRA_COUNTERS_REGISTER(counters, type, alloc_failed, storage, step);
 
 	list_for_each_entry(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
 		if (!(stats_px_get_cap(mod->domain_flags) & px_cap))
@@ -1107,7 +1119,7 @@ int stats_allocate_proxy_counters_internal(struct extra_counters **counters,
 		EXTRA_COUNTERS_ADD(mod, *counters, mod->counters, mod->counters_size);
 	}
 
-	EXTRA_COUNTERS_ALLOC(*counters, alloc_failed);
+	EXTRA_COUNTERS_ALLOC(*counters, alloc_failed, global.nbtgroups);
 
 	list_for_each_entry(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
 		if (!(stats_px_get_cap(mod->domain_flags) & px_cap))
@@ -1133,7 +1145,10 @@ int stats_allocate_proxy_counters(struct proxy *px)
 	if (px->cap & PR_CAP_FE) {
 		if (!stats_allocate_proxy_counters_internal(&px->extra_counters_fe,
 		                                            COUNTERS_FE,
-		                                            STATS_PX_CAP_FE)) {
+		                                            STATS_PX_CAP_FE,
+		                                            &px->per_tgrp->extra_counters_fe_storage,
+		                                            &px->per_tgrp[1].extra_counters_fe_storage -
+		                                            &px->per_tgrp[0].extra_counters_fe_storage)) {
 			return 0;
 		}
 	}
@@ -1141,7 +1156,10 @@ int stats_allocate_proxy_counters(struct proxy *px)
 	if (px->cap & PR_CAP_BE) {
 		if (!stats_allocate_proxy_counters_internal(&px->extra_counters_be,
 		                                            COUNTERS_BE,
-		                                            STATS_PX_CAP_BE)) {
+		                                            STATS_PX_CAP_BE,
+		                                            &px->per_tgrp->extra_counters_be_storage,
+		                                            &px->per_tgrp[1].extra_counters_be_storage -
+		                                            &px->per_tgrp[0].extra_counters_be_storage)) {
 			return 0;
 		}
 	}
@@ -1149,7 +1167,10 @@ int stats_allocate_proxy_counters(struct proxy *px)
 	for (sv = px->srv; sv; sv = sv->next) {
 		if (!stats_allocate_proxy_counters_internal(&sv->extra_counters,
 		                                            COUNTERS_SV,
-		                                            STATS_PX_CAP_SRV)) {
+		                                            STATS_PX_CAP_SRV,
+		                                            &sv->per_tgrp->extra_counters_storage,
+		                                            &sv->per_tgrp[1].extra_counters_storage -
+		                                            &sv->per_tgrp[0].extra_counters_storage)) {
 			return 0;
 		}
 	}
@@ -1157,7 +1178,8 @@ int stats_allocate_proxy_counters(struct proxy *px)
 	list_for_each_entry(li, &px->conf.listeners, by_fe) {
 		if (!stats_allocate_proxy_counters_internal(&li->extra_counters,
 		                                            COUNTERS_LI,
-		                                            STATS_PX_CAP_LI)) {
+		                                            STATS_PX_CAP_LI,
+		                                            &li->extra_counters_storage, 0)) {
 			return 0;
 		}
 	}
@@ -1315,8 +1337,7 @@ static void deinit_stats(void)
 	for (i = 0; i < STATS_DOMAIN_COUNT; ++i) {
 		const int domain = domains[i];
 
-		if (stat_cols[domain])
-			free(stat_cols[domain]);
+		free(stat_cols[domain]);
 	}
 }
 
@@ -1324,8 +1345,7 @@ REGISTER_POST_DEINIT(deinit_stats);
 
 static void free_trash_counters(void)
 {
-	if (trash_counters)
-		free(trash_counters);
+	free(trash_counters);
 }
 
 REGISTER_PER_THREAD_FREE(free_trash_counters);

@@ -39,7 +39,6 @@
 #include <haproxy/sc_strm.h>
 #include <haproxy/session-t.h>
 #include <haproxy/signal.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stconn.h>
 #include <haproxy/stick_table.h>
 #include <haproxy/stream.h>
@@ -2350,6 +2349,11 @@ static inline int peer_treat_definemsg(struct appctx *appctx, struct peer *p,
 	if (!*msg_cur) {
 		TRACE_ERROR("malformed table definition message: no table type", PEERS_EV_SESS_IO|PEERS_EV_RX_MSG|PEERS_EV_PROTO_ERR, appctx, p);
 		goto malformed_exit;
+	}
+
+	if (table_type < 0 || table_type >= PEER_KT_TYPES) {
+		TRACE_PROTO("ignore table definition message: unknown table type", PEERS_EV_SESS_IO|PEERS_EV_RX_MSG|PEERS_EV_PROTO_DEF, appctx, p);
+		goto ignore_msg;
 	}
 
 	table_keylen = intdecode(msg_cur, msg_end);

@@ -130,7 +130,8 @@ enum {
 
 	CO_FL_OPT_TOS       = 0x00000020,  /* connection has a special sockopt tos */
 
-	/* unused : 0x00000040, 0x00000080 */
+	CO_FL_QSTRM_SEND    = 0x00000040,  /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
+	CO_FL_QSTRM_RECV    = 0x00000080,  /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
 
 	/* These flags indicate whether the Control and Transport layers are initialized */
 	CO_FL_CTRL_READY    = 0x00000100, /* FD was registered, fd_delete() needed */
@@ -212,13 +213,14 @@ static forceinline char *conn_show_flags(char *buf, size_t len, const char *deli
 	/* flags */
 	_(CO_FL_SAFE_LIST, _(CO_FL_IDLE_LIST, _(CO_FL_CTRL_READY,
 	_(CO_FL_REVERSED, _(CO_FL_ACT_REVERSING, _(CO_FL_OPT_MARK, _(CO_FL_OPT_TOS,
+	_(CO_FL_QSTRM_SEND, _(CO_FL_QSTRM_RECV,
 	_(CO_FL_XPRT_READY, _(CO_FL_WANT_DRAIN, _(CO_FL_WAIT_ROOM, _(CO_FL_SSL_NO_CACHED_INFO, _(CO_FL_EARLY_SSL_HS,
 	_(CO_FL_EARLY_DATA, _(CO_FL_SOCKS4_SEND, _(CO_FL_SOCKS4_RECV, _(CO_FL_SOCK_RD_SH,
 	_(CO_FL_SOCK_WR_SH, _(CO_FL_ERROR, _(CO_FL_FDLESS, _(CO_FL_WAIT_L4_CONN,
 	_(CO_FL_WAIT_L6_CONN, _(CO_FL_SEND_PROXY, _(CO_FL_ACCEPT_PROXY, _(CO_FL_ACCEPT_CIP,
 	_(CO_FL_SSL_WAIT_HS, _(CO_FL_PRIVATE, _(CO_FL_RCVD_PROXY, _(CO_FL_SESS_IDLE,
 	_(CO_FL_XPRT_TRACKED
-	)))))))))))))))))))))))))))));
+	)))))))))))))))))))))))))))))));
 	/* epilogue */
 	_(~0U);
 	return buf;
@@ -345,6 +347,7 @@ enum {
 	XPRT_SSL = 1,
 	XPRT_HANDSHAKE = 2,
 	XPRT_QUIC = 3,
+	XPRT_QSTRM = 4,
 	XPRT_ENTRIES /* must be last one */
 };
 
@@ -356,6 +359,7 @@ enum {
 	MX_FL_NO_UPG      = 0x00000004, /* set if mux does not support any upgrade */
 	MX_FL_FRAMED      = 0x00000008, /* mux working on top of a framed transport layer (QUIC) */
 	MX_FL_REVERSABLE  = 0x00000010, /* mux supports connection reversal */
+	MX_FL_EXPERIMENTAL = 0x00000020, /* requires experimental support directives */
 };
 
 /* PROTO token registration */

@@ -68,6 +68,8 @@
 #include <haproxy/tools.h>
 #include <haproxy/uri_auth.h>
 
+/* Lock to ensure multiple backends deletion concurrently is safe */
+static __decl_spinlock(proxies_del_lock);
 
 int listeners;	/* # of proxy listeners, set by cfgparse */
 struct proxy *proxies_list  = NULL;     /* list of main proxies */
@@ -229,10 +231,15 @@ static inline void proxy_free_common(struct proxy *px)
 	struct logger *log, *logb;
 	struct lf_expr *lf, *lfb;
 
+	/* First release from global elements under lock protection. */
+	HA_SPIN_LOCK(PROXIES_DEL_LOCK, &proxies_del_lock);
 	/* note that the node's key points to p->id */
 	cebis_item_delete((px->cap & PR_CAP_DEF) ? &defproxy_by_name : &proxy_by_name, conf.name_node, id, px);
-	ha_free(&px->id);
 	LIST_DEL_INIT(&px->global_list);
+	HA_SPIN_UNLOCK(PROXIES_DEL_LOCK, &proxies_del_lock);
+
+	/* Now release internal proxy elements. */
+	ha_free(&px->id);
 	drop_file_name(&px->conf.file);
 	counters_fe_shared_drop(&px->fe_counters.shared);
 	counters_be_shared_drop(&px->be_counters.shared);
@@ -456,9 +463,19 @@ void deinit_proxy(struct proxy *p)
 	proxy_unref_defaults(p);
 }
 
-/* deinit and free <p> proxy */
-void free_proxy(struct proxy *p)
+/* Decrement <p> refcount and free it if null. For a default proxy instance,
+ * refcount is ignored and free is immediately performed.
+ */
+void proxy_drop(struct proxy *p)
 {
+	if (!p)
+		return;
+
+	if (!(p->cap & PR_CAP_DEF)) {
+		if (HA_ATOMIC_SUB_FETCH(&p->refcount, 1))
+			return;
+	}
+
 	deinit_proxy(p);
 	ha_free(&p);
 }
@@ -1560,7 +1577,9 @@ void init_new_proxy(struct proxy *p)
 	LIST_INIT(&p->conf.args.list);
 	LIST_INIT(&p->conf.lf_checks);
 	LIST_INIT(&p->filter_configs);
-	LIST_INIT(&p->tcpcheck_rules.preset_vars);
+	LIST_INIT(&p->tcpcheck.preset_vars);
+	LIST_INIT(&p->filter_sequence.req);
+	LIST_INIT(&p->filter_sequence.res);
 
 	MT_LIST_INIT(&p->lbprm.lb_free_list);
 
@@ -1580,6 +1599,7 @@ void init_new_proxy(struct proxy *p)
 
 	p->stream_new_from_sc = stream_new;
 	guid_init(&p->guid);
+	MT_LIST_INIT(&p->watcher_list);
 
 	p->extra_counters_fe = NULL;
 	p->extra_counters_be = NULL;
@@ -1658,11 +1678,17 @@ int proxy_finalize(struct proxy *px, int *err_code)
 		}
 
 		if (bind_conf->mux_proto) {
+			int is_quic;
+
+			if ((bind_conf->options & (BC_O_USE_SOCK_DGRAM | BC_O_USE_XPRT_STREAM)) == (BC_O_USE_SOCK_DGRAM | BC_O_USE_XPRT_STREAM))
+				is_quic = 1;
+			else
+				is_quic = 0;
 			/* it is possible that an incorrect mux was referenced
 			 * due to the proxy's mode not being taken into account
 			 * on first pass. Let's adjust it now.
 			 */
-			mux_ent = conn_get_best_mux_entry(bind_conf->mux_proto->token, PROTO_SIDE_FE, mode);
+			mux_ent = conn_get_best_mux_entry(bind_conf->mux_proto->token, PROTO_SIDE_FE, is_quic, mode);
 
 			if (!mux_ent || !isteq(mux_ent->token, bind_conf->mux_proto->token)) {
 				ha_alert("%s '%s' : MUX protocol '%.*s' is not usable for 'bind %s' at [%s:%d].\n",
@@ -1852,26 +1878,10 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	else if (px->options & PR_O_TRANSP)
 		px->options &= ~PR_O_DISPATCH;
 
-	if ((px->tcpcheck_rules.flags & TCPCHK_RULES_UNUSED_HTTP_RS)) {
+	if ((px->tcpcheck.flags & TCPCHK_FL_UNUSED_HTTP_RS)) {
 		ha_warning("%s '%s' uses http-check rules without 'option httpchk', so the rules are ignored.\n",
 		           proxy_type_str(px), px->id);
 		*err_code |= ERR_WARN;
-	}
-
-	if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_TCPCHK_CHK &&
-	    (px->tcpcheck_rules.flags & TCPCHK_RULES_PROTO_CHK) != TCPCHK_RULES_HTTP_CHK) {
-		if (px->options & PR_O_DISABLE404) {
-			ha_warning("'%s' will be ignored for %s '%s' (requires 'option httpchk').\n",
-			           "disable-on-404", proxy_type_str(px), px->id);
-			*err_code |= ERR_WARN;
-			px->options &= ~PR_O_DISABLE404;
-		}
-		if (px->options2 & PR_O2_CHK_SNDST) {
-			ha_warning("'%s' will be ignored for %s '%s' (requires 'option httpchk').\n",
-			           "send-state", proxy_type_str(px), px->id);
-			*err_code |= ERR_WARN;
-			px->options2 &= ~PR_O2_CHK_SNDST;
-		}
 	}
 
 	if ((px->options2 & PR_O2_CHK_ANY) == PR_O2_EXT_CHK) {
@@ -1971,6 +1981,8 @@ int proxy_finalize(struct proxy *px, int *err_code)
 				 */
 				px->options |= PR_O_HTTP_UPG;
 			}
+
+			target->flags |= PR_FL_NON_PURGEABLE;
 		}
 	}
 
@@ -2047,6 +2059,8 @@ int proxy_finalize(struct proxy *px, int *err_code)
 				 */
 				px->options |= PR_O_HTTP_UPG;
 			}
+
+			target->flags |= PR_FL_NON_PURGEABLE;
 		}
 		*err_code |= warnif_tcp_http_cond(px, rule->cond);
 	}
@@ -2130,6 +2144,9 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	cfgerr += check_action_rules(&px->http_req_rules, px, err_code);
 	cfgerr += check_action_rules(&px->http_res_rules, px, err_code);
 	cfgerr += check_action_rules(&px->http_after_res_rules, px, err_code);
+#ifdef USE_QUIC
+	cfgerr += check_action_rules(&px->quic_init_rules, px, err_code);
+#endif
 
 	/* Warn is a switch-mode http is used on a TCP listener with servers but no backend */
 	if (!px->defbe.name && LIST_ISEMPTY(&px->switching_rules) && px->srv) {
@@ -2412,7 +2429,7 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	if ((px->cap & PR_CAP_BE) && !px->timeout.queue)
 		px->timeout.queue = px->timeout.connect;
 
-	if ((px->tcpcheck_rules.flags & TCPCHK_RULES_UNUSED_TCP_RS)) {
+	if (px->tcpcheck.flags & TCPCHK_FL_UNUSED_TCP_RS) {
 		ha_warning("%s '%s' uses tcp-check rules without 'option tcp-check', so the rules are ignored.\n",
 		           proxy_type_str(px), px->id);
 		*err_code |= ERR_WARN;
@@ -2522,12 +2539,16 @@ int proxy_finalize(struct proxy *px, int *err_code)
 
 		srv_minmax_conn_apply(newsrv);
 
+		*err_code |= check_server_tcpcheck(newsrv);
+		if (*err_code & (ERR_ABORT|ERR_FATAL))
+			goto out;
+
 		/* this will also properly set the transport layer for
 		 * prod and checks
 		 * if default-server have use_ssl, prerare ssl init
 		 * without activating it */
 		if (newsrv->use_ssl == 1 || newsrv->check.use_ssl == 1 ||
-		    (newsrv->proxy->options & PR_O_TCPCHK_SSL) ||
+		    (newsrv->check.tcpcheck->flags & TCPCHK_FL_USE_SSL) ||
 		    ((newsrv->flags & SRV_F_DEFSRV_USE_SSL) && newsrv->use_ssl != 1)) {
 			if (xprt_get(XPRT_SSL) && xprt_get(XPRT_SSL)->prepare_srv)
 				cfgerr += xprt_get(XPRT_SSL)->prepare_srv(newsrv);
@@ -2646,6 +2667,8 @@ int proxy_finalize(struct proxy *px, int *err_code)
 		           proxy_type_str(px), px->id);
 		*err_code |= ERR_WARN;
 	}
+
+	*err_code |= proxy_check_http_errors(px);
 
 	if (px->mode != PR_MODE_HTTP && !(px->options & PR_O_HTTP_UPG)) {
 		int optnum;
@@ -2852,7 +2875,7 @@ int proxy_finalize(struct proxy *px, int *err_code)
 		 * due to the proxy's mode not being taken into account
 		 * on first pass. Let's adjust it now.
 		 */
-		mux_ent = conn_get_best_mux_entry(newsrv->mux_proto->token, PROTO_SIDE_BE, mode);
+		mux_ent = conn_get_best_mux_entry(newsrv->mux_proto->token, PROTO_SIDE_BE, srv_is_quic(newsrv), mode);
 
 		if (!mux_ent || !isteq(mux_ent->token, newsrv->mux_proto->token)) {
 			ha_alert("%s '%s' : MUX protocol '%.*s' is not usable for server '%s' at [%s:%d].\n",
@@ -2891,7 +2914,6 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	if (px->cap & PR_CAP_BE) {
 		if (!(px->options2 & PR_O2_CHK_ANY)) {
 			struct tcpcheck_ruleset *rs = NULL;
-			struct tcpcheck_rules *rules = &px->tcpcheck_rules;
 
 			px->options2 |= PR_O2_TCPCHK_CHK;
 
@@ -2904,10 +2926,8 @@ int proxy_finalize(struct proxy *px, int *err_code)
 					cfgerr++;
 				}
 			}
-
-			free_tcpcheck_vars(&rules->preset_vars);
-			rules->list = &rs->rules;
-			rules->flags = 0;
+			px->tcpcheck.rs = rs;
+			free_tcpcheck_vars(&px->tcpcheck.preset_vars);
 		}
 	}
 
@@ -2958,21 +2978,27 @@ static void defaults_px_free(struct proxy *defproxy)
 
 /* Removes <px> defaults instance from the name tree, free its content and
  * storage. This must only be used if <px> is unreferenced.
+ *
+ * Uses PROXIES_DEL_LOCK to protect global tree/list accesses.
  */
 void defaults_px_destroy(struct proxy *px)
 {
 	BUG_ON(!(px->cap & PR_CAP_DEF));
-	BUG_ON(px->conf.refcount != 0);
+	BUG_ON(px->conf.def_ref != 0);
 
+	HA_SPIN_LOCK(PROXIES_DEL_LOCK, &proxies_del_lock);
 	cebis_item_delete(&defproxy_by_name, conf.name_node, id, px);
 	LIST_DELETE(&px->el);
+	HA_SPIN_UNLOCK(PROXIES_DEL_LOCK, &proxies_del_lock);
 
 	defaults_px_free(px);
 	free(px);
 }
 
 /* delete all unreferenced default proxies. A default proxy is unreferenced if
- * its refcount is equal to zero.
+ * its <def_ref> count is equal to zero.
+ *
+ * Not thread safe - currently only used during init.
  */
 void defaults_px_destroy_all_unref(void)
 {
@@ -2981,7 +3007,7 @@ void defaults_px_destroy_all_unref(void)
 	for (px = cebis_item_first(&defproxy_by_name, conf.name_node, id, struct proxy); px; px = nx) {
 		BUG_ON(!(px->cap & PR_CAP_DEF));
 		nx = cebis_item_next(&defproxy_by_name, conf.name_node, id, px);
-		if (!px->conf.refcount)
+		if (!HA_ATOMIC_LOAD(&px->conf.def_ref))
 			defaults_px_destroy(px);
 	}
 }
@@ -2989,16 +3015,22 @@ void defaults_px_destroy_all_unref(void)
 /* Removes <px> defaults from the name tree. This operation is useful when a
  * section is made invisible by a newer instance with the same name. If <px> is
  * not referenced it is freed immediately, else it is kept in defaults_list.
+ *
+ * Not thread safe - currently only used during parsing.
  */
 void defaults_px_detach(struct proxy *px)
 {
 	BUG_ON(!(px->cap & PR_CAP_DEF));
 	cebis_item_delete(&defproxy_by_name, conf.name_node, id, px);
-	if (!px->conf.refcount)
+	if (!HA_ATOMIC_LOAD(&px->conf.def_ref))
 		defaults_px_destroy(px);
 	/* If not destroyed, <px> can still be accessed in <defaults_list>. */
 }
 
+/* Increments by one defaults proxy reference of all defaults stored in tree name.
+ *
+ * Not thread safe - currently only used during init.
+ */
 void defaults_px_ref_all(void)
 {
 	struct proxy *px;
@@ -3006,10 +3038,15 @@ void defaults_px_ref_all(void)
 	for (px = cebis_item_first(&defproxy_by_name, conf.name_node, id, struct proxy);
 	     px;
 	     px = cebis_item_next(&defproxy_by_name, conf.name_node, id, px)) {
-		++px->conf.refcount;
+		HA_ATOMIC_INC(&px->conf.def_ref);
 	}
 }
 
+/* Decrements defaults proxy ref of all defaults. This is the reverse of
+ * defaults_px_ref_all().
+ *
+ * Not thread safe - currently only used during deinit.
+ */
 void defaults_px_unref_all(void)
 {
 	struct proxy *px, *nx;
@@ -3017,18 +3054,17 @@ void defaults_px_unref_all(void)
 	for (px = cebis_item_first(&defproxy_by_name, conf.name_node, id, struct proxy); px; px = nx) {
 		nx = cebis_item_next(&defproxy_by_name, conf.name_node, id, px);
 
-		BUG_ON(!px->conf.refcount);
-		if (!--px->conf.refcount)
+		BUG_ON(!px->conf.def_ref);
+		if (!HA_ATOMIC_SUB_FETCH(&px->conf.def_ref, 1))
 			defaults_px_destroy(px);
 	}
 }
 
 /* Add a reference on the default proxy <defpx> for the proxy <px> Nothing is
  * done if <px> already references <defpx>. Otherwise, the default proxy
- * refcount is incremented by one.
+ * <def_ref> count is incremented by one.
  *
- * This operation is not thread safe. It must only be performed during init
- * stage or under thread isolation.
+ * Access on default proxy reference is thread safe thanks to atomic ops.
  */
 static inline void defaults_px_ref(struct proxy *defpx, struct proxy *px)
 {
@@ -3038,11 +3074,11 @@ static inline void defaults_px_ref(struct proxy *defpx, struct proxy *px)
 	BUG_ON(px->defpx);
 
 	px->defpx = defpx;
-	defpx->conf.refcount++;
+	HA_ATOMIC_INC(&defpx->conf.def_ref);
 }
 
 /* Check that <px> can inherits from <defpx> default proxy. If some settings
- * cannot be copied, refcount of the defaults instance is incremented.
+ * cannot be copied, <def_ref> count of the defaults instance is incremented.
  * Inheritance may be impossible due to incompatibility issues. In this case,
  * <errmsg> will be allocated to point to a textual description of the error.
  *
@@ -3075,7 +3111,7 @@ int proxy_ref_defaults(struct proxy *px, struct proxy *defpx, char **errmsg)
 	 * - It cannot define 'tcp-response content' rules if it
 	 *   is used to init frontend sections.
 	 *
-	 * If no error is found, refcount of the default proxy is incremented.
+	 * If no error is found, <def_ref> count of the default proxy is incremented.
 	 */
 	if ((!LIST_ISEMPTY(&defpx->http_req_rules)        ||
 	     !LIST_ISEMPTY(&defpx->http_res_rules)        ||
@@ -3124,7 +3160,7 @@ int proxy_ref_defaults(struct proxy *px, struct proxy *defpx, char **errmsg)
 		defaults_px_ref(defpx, px);
 	}
 
-	if ((defpx->tcpcheck_rules.flags & TCPCHK_RULES_PROTO_CHK) &&
+	if (defpx->tcpcheck.rs && (defpx->tcpcheck.rs->flags & TCPCHK_RULES_PROTO_CHK) &&
 	    (px->cap & PR_CAP_LISTEN) == PR_CAP_BE) {
 		/* If the current default proxy defines tcpcheck rules, the
 		 * current proxy will keep a reference on it. but only if the
@@ -3138,15 +3174,16 @@ int proxy_ref_defaults(struct proxy *px, struct proxy *defpx, char **errmsg)
 }
 
 /* proxy <px> removes its reference on its default proxy. The default proxy
- * refcount is decremented by one. If it was the last reference, the
- * corresponding default proxy is destroyed. For now this operation is not
- * thread safe and is performed during deinit staged only.
-*/
+ * <def_ref> count is decremented by one. If it was the last reference, the
+ * corresponding default proxy is destroyed.
+ *
+ * Access on default proxy reference is thread safe thanks to atomic ops.
+ */
 void proxy_unref_defaults(struct proxy *px)
 {
 	if (px->defpx == NULL)
 		return;
-	if (!--px->defpx->conf.refcount)
+	if (!HA_ATOMIC_SUB_FETCH(&px->defpx->conf.def_ref, 1))
 		defaults_px_destroy(px->defpx);
 	px->defpx = NULL;
 }
@@ -3210,6 +3247,8 @@ struct proxy *alloc_new_proxy(const char *name, unsigned int cap, char **errmsg)
 	if (!setup_new_proxy(curproxy, name, cap, errmsg))
 		goto fail;
 
+	proxy_take(curproxy);
+
  done:
 	return curproxy;
 
@@ -3222,6 +3261,13 @@ struct proxy *alloc_new_proxy(const char *name, unsigned int cap, char **errmsg)
 		srv_free(&curproxy->defsrv);
 	free(curproxy);
 	return NULL;
+}
+
+/* Increment <px> refcount. Does nothing for a default proxy instance. */
+void proxy_take(struct proxy *px)
+{
+	if (!(px->cap & PR_CAP_DEF))
+		HA_ATOMIC_INC(&px->refcount);
 }
 
 /* post-check for proxies */
@@ -3352,14 +3398,12 @@ static int proxy_defproxy_cpy(struct proxy *curproxy, const struct proxy *defpro
 		curproxy->redispatch_after = defproxy->redispatch_after;
 		curproxy->max_ka_queue = defproxy->max_ka_queue;
 
-		curproxy->tcpcheck_rules.flags = (defproxy->tcpcheck_rules.flags & ~TCPCHK_RULES_UNUSED_RS);
-		curproxy->tcpcheck_rules.list  = defproxy->tcpcheck_rules.list;
-		if (!LIST_ISEMPTY(&defproxy->tcpcheck_rules.preset_vars)) {
-			if (!dup_tcpcheck_vars(&curproxy->tcpcheck_rules.preset_vars,
-					       &defproxy->tcpcheck_rules.preset_vars)) {
-				memprintf(errmsg, "proxy '%s': failed to duplicate tcpcheck preset-vars", curproxy->id);
-				return 1;
-			}
+		curproxy->tcpcheck.flags = (defproxy->tcpcheck.flags & ~TCPCHK_FL_UNUSED_RS);
+		curproxy->tcpcheck.rs  = defproxy->tcpcheck.rs;
+		if (!dup_tcpcheck_vars(&curproxy->tcpcheck.preset_vars,
+				       &defproxy->tcpcheck.preset_vars)) {
+			memprintf(errmsg, "proxy '%s': failed to duplicate tcpcheck preset-vars", curproxy->id);
+			return 1;
 		}
 
 		curproxy->ck_opts = defproxy->ck_opts;
@@ -4059,6 +4103,7 @@ end:
 int stream_set_backend(struct stream *s, struct proxy *be)
 {
 	unsigned int req_ana;
+	unsigned int beconn;
 
 	if (s->flags & SF_BE_ASSIGNED)
 		return 1;
@@ -4072,8 +4117,8 @@ int stream_set_backend(struct stream *s, struct proxy *be)
 	else
 		s->be_tgcounters = NULL;
 
-	HA_ATOMIC_UPDATE_MAX(&be->be_counters.conn_max,
-			     HA_ATOMIC_ADD_FETCH(&be->beconn, 1));
+	beconn = HA_ATOMIC_ADD_FETCH(&be->beconn, 1);
+	COUNTERS_UPDATE_MAX(&be->be_counters.conn_max, beconn);
 	proxy_inc_be_ctr(be);
 
 	/* assign new parameters to the stream from the new backend */
@@ -4856,16 +4901,12 @@ static int cli_parse_add_backend(char **args, char *payload, struct appctx *appc
 		return 1;
 	}
 	if (!(defpx->flags & PR_FL_DEF_EXPLICIT_MODE) && !mode) {
-		cli_dynerr(appctx, memprintf(&msg, "Mode is required as '%s' default proxy does not explicitely defines it.\n", def_name));
+		cli_dynerr(appctx, memprintf(&msg, "Mode is required as '%s' default proxy does not explicitly defines it.\n", def_name));
 		return 1;
 	}
 	if (defpx->mode != PR_MODE_TCP && defpx->mode != PR_MODE_HTTP) {
 		cli_dynerr(appctx, memprintf(&msg, "Dynamic backends only support TCP or HTTP mode, whereas default proxy '%s' uses 'mode %s'.\n",
 		           def_name, proxy_mode_str(defpx->mode)));
-		return 1;
-	}
-	if (!LIST_ISEMPTY(&defpx->conf.errors)) {
-		cli_dynerr(appctx, memprintf(&msg, "Dynamic backends cannot inherit from default proxy '%s' because it references HTTP errors.\n", def_name));
 		return 1;
 	}
 
@@ -4914,7 +4955,10 @@ static int cli_parse_add_backend(char **args, char *payload, struct appctx *appc
 
 	if (!stats_allocate_proxy_counters_internal(&px->extra_counters_be,
 	                                            COUNTERS_BE,
-	                                            STATS_PX_CAP_BE)) {
+	                                            STATS_PX_CAP_BE,
+	                                            &px->per_tgrp->extra_counters_be_storage,
+	                                            &px->per_tgrp[1].extra_counters_be_storage -
+	                                            &px->per_tgrp[0].extra_counters_be_storage)) {
 		memprintf(&msg, "failed to allocate extra counters");
 		goto err;
 	}
@@ -4925,6 +4969,7 @@ static int cli_parse_add_backend(char **args, char *payload, struct appctx *appc
 		memprintf(&msg, "no spare proxy ID available");
 		goto err;
 	}
+	proxy_index_id(px);
 	dynpx_next_id = px->uuid;
 
 	if (!proxies_list) {
@@ -4950,8 +4995,8 @@ static int cli_parse_add_backend(char **args, char *payload, struct appctx *appc
 	return 1;
 
  err:
-	/* free_proxy() ensures any potential refcounting on defpx is decremented. */
-	free_proxy(px);
+	/* This ensures any potential refcounting on defpx is decremented. */
+	proxy_drop(px);
 	thread_release();
 
 	if (msg) {
@@ -4963,6 +5008,143 @@ static int cli_parse_add_backend(char **args, char *payload, struct appctx *appc
 		cli_umsgerr(appctx);
 	}
 
+	return 1;
+}
+
+/* Test if the backend instance named <bename> can be deleted.
+ *
+ * Returns a positive integer if backend can be deleted. Else, 0 is returned if
+ * backend should be deletable after some delay. A negative value indicates
+ * that backend cannot be deleted without any external action.
+ *
+ * If <pb> is not NULL, it will be set to point to the backend instance if name
+ * is found. If <pm> is not NULL, it will be used on error to point to the
+ * description failure.
+ */
+int be_check_for_deletion(const char *bename, struct proxy **pb, const char **pm)
+{
+	struct proxy *be = NULL;
+	const char *msg = NULL;
+	int ret;
+
+	/* First, unrecoverable errors */
+	ret = -1;
+
+	if (!(be = proxy_be_by_name(bename))) {
+		msg = "No such backend.";
+		goto out;
+	}
+
+	if (be->cap & PR_CAP_FE) {
+		msg = "Cannot delete a listen section.";
+		goto out;
+	}
+
+	if (be->options & (PR_O_DISPATCH|PR_O_TRANSP)) {
+		msg = "Deletion of backend with deprecated dispatch/transparent options is not supported.";
+		goto out;
+	}
+
+	if (be->table) {
+		msg = "Cannot remove a backend with stick-table.";
+		goto out;
+	}
+
+	if (be->flags & PR_FL_NON_PURGEABLE) {
+		msg = "This proxy cannot be removed at runtime due to other configuration elements pointing to it.";
+		goto out;
+	}
+
+	if (be->mode != PR_MODE_TCP && be->mode != PR_MODE_HTTP) {
+		msg = "Only TCP or HTTP proxies can be removed at runtime.";
+		goto out;
+	}
+
+	if (!(be->flags & PR_FL_BE_UNPUBLISHED)) {
+		msg = "Backend must be unpublished prior to its deletion.";
+		goto out;
+	}
+
+	if (be->srv) {
+		msg = "Only a backend without server can be deleted.";
+		goto out;
+	}
+
+	/* Second, conditions that may change over time */
+	ret = 0;
+
+	if (be->beconn) {
+		msg = "Backend still has attached streams on it.";
+		goto out;
+	}
+
+	ret = 1;
+
+ out:
+	if (pb)
+		*pb = be;
+	if (pm)
+		*pm = msg;
+	return ret;
+}
+
+/* Handler for "delete backend". Runs under thread isolation. Always returns 1. */
+static int cli_parse_delete_backend(char **args, char *payload, struct appctx *appctx, void *private)
+{
+	struct watcher *px_watch;
+	struct proxy *px, *prev;
+	const char *msg;
+	char *be_name;
+	int ret;
+
+	if (!cli_has_level(appctx, ACCESS_LVL_ADMIN))
+		return 1;
+
+	if (*args[3]) {
+		cli_err(appctx, "Usage: del backend <name>.\n");
+		return 1;
+	}
+
+	thread_isolate_full();
+
+	be_name = args[2];
+	ret = be_check_for_deletion(be_name, &px, &msg);
+	if (ret <= 0) {
+		cli_err(appctx, msg);
+		goto out;
+	}
+
+	while (!MT_LIST_ISEMPTY(&px->watcher_list)) {
+		px_watch = MT_LIST_NEXT(&px->watcher_list, struct watcher *, el);
+		watcher_next(px_watch, px->next);
+	}
+
+	ceb32_item_delete(&used_proxy_id, conf.uuid_node, uuid, px);
+	cebis_item_delete(&proxy_by_name, conf.name_node, id, px);
+
+	/* Detach backend from global proxies_list. */
+	if (proxies_list == px) {
+		proxies_list = px->next;
+	}
+	else {
+		for (prev = proxies_list->next; prev && prev->next != px; prev = prev->next)
+			;
+		BUG_ON(!prev); /* Proxy instance not found in global list ? */
+		prev->next = px->next;
+	}
+
+	px->flags |= PR_FL_DELETED;
+
+	thread_release();
+
+	ha_notice("Backend deleted.\n");
+	proxy_drop(px);
+
+	cli_umsg(appctx, LOG_INFO);
+	return 1;
+
+ out:
+	thread_release();
 	return 1;
 }
 
@@ -5288,6 +5470,7 @@ static int cli_io_handler_show_errors(struct appctx *appctx)
 /* register cli keywords */
 static struct cli_kw_list cli_kws = {{ },{
 	{ { "add", "backend", NULL },                       "add backend <backend>                   : add a new backend",                                              cli_parse_add_backend, NULL, NULL, NULL, ACCESS_EXPERIMENTAL },
+	{ { "del", "backend", NULL },                       "del backend <backend>                   : delete a backend",                                               cli_parse_delete_backend, NULL, NULL, NULL, ACCESS_EXPERIMENTAL },
 	{ { "disable", "frontend",  NULL },                 "disable frontend <frontend>             : temporarily disable specific frontend",                          cli_parse_disable_frontend, NULL, NULL },
 	{ { "enable", "frontend",  NULL },                  "enable frontend <frontend>              : re-enable specific frontend",                                    cli_parse_enable_frontend, NULL, NULL },
 	{ { "publish", "backend",  NULL },                  "publish backend <backend>               : mark backend as ready for traffic",                              cli_parse_publish_backend, NULL, NULL },

@@ -862,7 +862,7 @@ static void fcgi_strm_notify_recv(struct fcgi_strm *fstrm)
 {
 	if (fstrm->subs && (fstrm->subs->events & SUB_RETRY_RECV)) {
 		TRACE_POINT(FCGI_EV_STRM_WAKE, fstrm->fconn->conn, fstrm);
-		tasklet_wakeup(fstrm->subs->tasklet);
+		tasklet_wakeup(fstrm->subs->tasklet, TASK_WOKEN_IO);
 		fstrm->subs->events &= ~SUB_RETRY_RECV;
 		if (!fstrm->subs->events)
 			fstrm->subs = NULL;
@@ -875,7 +875,7 @@ static void fcgi_strm_notify_send(struct fcgi_strm *fstrm)
 	if (fstrm->subs && (fstrm->subs->events & SUB_RETRY_SEND)) {
 		TRACE_POINT(FCGI_EV_STRM_WAKE, fstrm->fconn->conn, fstrm);
 		fstrm->flags |= FCGI_SF_NOTIFIED;
-		tasklet_wakeup(fstrm->subs->tasklet);
+		tasklet_wakeup(fstrm->subs->tasklet, TASK_WOKEN_IO);
 		fstrm->subs->events &= ~SUB_RETRY_SEND;
 		if (!fstrm->subs->events)
 			fstrm->subs = NULL;
@@ -886,26 +886,28 @@ static void fcgi_strm_notify_send(struct fcgi_strm *fstrm)
 	}
 }
 
-/* Alerts the data layer, trying to wake it up by all means, following
- * this sequence :
- *   - if the fcgi stream' data layer is subscribed to recv, then it's woken up
- *     for recv
- *   - if its subscribed to send, then it's woken up for send
- *   - if it was subscribed to neither, its ->wake() callback is called
- * It is safe to call this function with a closed stream which doesn't have a
- * stream connector anymore.
+
+/* Alerts the data layer by waking it up. TASK_WOKEN_MSG state is used by
+ * default and if the data layer is also subscribed to recv or send,
+ * TASK_WOKEN_IO is added. But first of all, we check if the shut tasklet must
+ * be woken up or not instead.
  */
 static void fcgi_strm_alert(struct fcgi_strm *fstrm)
 {
 	TRACE_POINT(FCGI_EV_STRM_WAKE, fstrm->fconn->conn, fstrm);
-	if (fstrm->subs ||
-	    (fstrm->flags & (FCGI_SF_WANT_SHUTR|FCGI_SF_WANT_SHUTW))) {
-		fcgi_strm_notify_recv(fstrm);
-		fcgi_strm_notify_send(fstrm);
-	}
-	else if (fcgi_strm_sc(fstrm) && fcgi_strm_sc(fstrm)->app_ops->wake != NULL) {
-		TRACE_POINT(FCGI_EV_STRM_WAKE, fstrm->fconn->conn, fstrm);
-		fcgi_strm_sc(fstrm)->app_ops->wake(fcgi_strm_sc(fstrm));
+	if (!fstrm->subs && (fstrm->flags & (FCGI_SF_WANT_SHUTR|FCGI_SF_WANT_SHUTW)))
+		tasklet_wakeup(fstrm->shut_tl);
+	else if (fcgi_strm_sc(fstrm)) {
+		unsigned int state = TASK_WOKEN_MSG;
+
+		if (fstrm->subs) {
+			if (fstrm->subs->events & SUB_RETRY_SEND)
+				fstrm->flags |= FCGI_SF_NOTIFIED;
+			fstrm->subs->events = 0;
+			fstrm->subs = NULL;
+			state |= TASK_WOKEN_IO;
+		}
+		tasklet_wakeup(fcgi_strm_sc(fstrm)->wait_event.tasklet, state);
 	}
 }
 
@@ -2724,13 +2726,42 @@ static void fcgi_process_demux(struct fcgi_conn *fconn)
 	fcgi_conn_restart_reading(fconn, 0);
 }
 
+/* resume each fstrm eligible for sending in list head <head> */
+static void fcgi_resume_each_sending_fstrm(struct fcgi_conn *fconn, struct list *head)
+{
+	struct fcgi_strm *fstrm, *fstrm_back;
+
+	TRACE_ENTER(FCGI_EV_FCONN_SEND|FCGI_EV_FCONN_WAKE, fconn->conn);
+
+	list_for_each_entry_safe(fstrm, fstrm_back, &fconn->send_list, send_list) {
+		if (fconn->state == FCGI_CS_CLOSED || fconn->flags & FCGI_CF_MUX_BLOCK_ANY)
+			break;
+
+		fstrm->flags &= ~FCGI_SF_BLK_ANY;
+
+		if (fstrm->flags & FCGI_SF_NOTIFIED)
+			continue;
+
+		/* If the sender changed his mind and unsubscribed, let's just
+		 * remove the stream from the send_list.
+		 */
+		if (!(fstrm->flags & (FCGI_SF_WANT_SHUTR|FCGI_SF_WANT_SHUTW)) &&
+		    (!fstrm->subs || !(fstrm->subs->events & SUB_RETRY_SEND))) {
+			LIST_DEL_INIT(&fstrm->send_list);
+			continue;
+		}
+
+		fcgi_strm_notify_send(fstrm);
+	}
+
+	TRACE_LEAVE(FCGI_EV_FCONN_SEND|FCGI_EV_FCONN_WAKE, fconn->conn);
+}
+
 /* process Tx records from streams to be multiplexed. Returns > 0 if it reached
  * the end.
  */
 static int fcgi_process_mux(struct fcgi_conn *fconn)
 {
-	struct fcgi_strm *fstrm, *fstrm_back;
-
 	TRACE_ENTER(FCGI_EV_FCONN_WAKE, fconn->conn);
 
 	if (unlikely(fconn->state < FCGI_CS_RECORD_H)) {
@@ -2753,36 +2784,7 @@ static int fcgi_process_mux(struct fcgi_conn *fconn)
 	}
 
   mux:
-	list_for_each_entry_safe(fstrm, fstrm_back, &fconn->send_list, send_list) {
-		if (fconn->state == FCGI_CS_CLOSED || fconn->flags & FCGI_CF_MUX_BLOCK_ANY)
-			break;
-
-		if (fstrm->flags & FCGI_SF_NOTIFIED)
-			continue;
-
-		/* If the sender changed his mind and unsubscribed, let's just
-		 * remove the stream from the send_list.
-		 */
-		if (!(fstrm->flags & (FCGI_SF_WANT_SHUTR|FCGI_SF_WANT_SHUTW)) &&
-		    (!fstrm->subs || !(fstrm->subs->events & SUB_RETRY_SEND))) {
-			LIST_DEL_INIT(&fstrm->send_list);
-			continue;
-		}
-
-		if (fstrm->subs && fstrm->subs->events & SUB_RETRY_SEND) {
-			TRACE_POINT(FCGI_EV_STRM_WAKE, fconn->conn, fstrm);
-			fstrm->flags &= ~FCGI_SF_BLK_ANY;
-			fstrm->flags |= FCGI_SF_NOTIFIED;
-			tasklet_wakeup(fstrm->subs->tasklet);
-			fstrm->subs->events &= ~SUB_RETRY_SEND;
-			if (!fstrm->subs->events)
-				fstrm->subs = NULL;
-		} else {
-			/* it's the shut request that was queued */
-			TRACE_POINT(FCGI_EV_STRM_WAKE, fconn->conn, fstrm);
-			tasklet_wakeup(fstrm->shut_tl);
-		}
-	}
+	fcgi_resume_each_sending_fstrm(fconn, &fconn->send_list);
 
  fail:
 	if (fconn->state == FCGI_CS_CLOSED) {
@@ -2986,40 +2988,9 @@ static int fcgi_send(struct fcgi_conn *fconn)
 	/* We're not full anymore, so we can wake any task that are waiting
 	 * for us.
 	 */
-	if (!(fconn->flags & (FCGI_CF_MUX_MFULL | FCGI_CF_DEM_MROOM)) && fconn->state >= FCGI_CS_RECORD_H) {
-		struct fcgi_strm *fstrm;
+	if (!(fconn->flags & (FCGI_CF_MUX_MFULL | FCGI_CF_DEM_MROOM)) && fconn->state >= FCGI_CS_RECORD_H)
+		fcgi_resume_each_sending_fstrm(fconn, &fconn->send_list);
 
-		list_for_each_entry(fstrm, &fconn->send_list, send_list) {
-			if (fconn->state == FCGI_CS_CLOSED || fconn->flags & FCGI_CF_MUX_BLOCK_ANY)
-				break;
-
-			if (fstrm->flags & FCGI_SF_NOTIFIED)
-				continue;
-
-			/* If the sender changed his mind and unsubscribed, let's just
-			 * remove the stream from the send_list.
-			 */
-			if (!(fstrm->flags & (FCGI_SF_WANT_SHUTR|FCGI_SF_WANT_SHUTW)) &&
-			    (!fstrm->subs || !(fstrm->subs->events & SUB_RETRY_SEND))) {
-				LIST_DEL_INIT(&fstrm->send_list);
-				continue;
-			}
-
-			if (fstrm->subs && fstrm->subs->events & SUB_RETRY_SEND) {
-				TRACE_DEVEL("waking up pending stream", FCGI_EV_FCONN_SEND|FCGI_EV_STRM_WAKE, conn, fstrm);
-				fstrm->flags &= ~FCGI_SF_BLK_ANY;
-				fstrm->flags |= FCGI_SF_NOTIFIED;
-				tasklet_wakeup(fstrm->subs->tasklet);
-				fstrm->subs->events &= ~SUB_RETRY_SEND;
-				if (!fstrm->subs->events)
-					fstrm->subs = NULL;
-			} else {
-				/* it's the shut request that was queued */
-				TRACE_POINT(FCGI_EV_STRM_WAKE, fconn->conn, fstrm);
-				tasklet_wakeup(fstrm->shut_tl);
-			}
-		}
-	}
 	/* We're done, no more to send */
 	if (!br_data(fconn->mbuf)) {
 		TRACE_DEVEL("leaving with everything sent", FCGI_EV_FCONN_SEND, conn);
@@ -3765,7 +3736,7 @@ static void fcgi_detach(struct sedesc *sd)
 			if (eb_is_empty(&fconn->streams_by_id)) {
 				if (!fconn->conn->owner) {
 					/* Session insertion above has failed and connection is idle, remove it. */
-					fconn->conn->mux->destroy(fconn);
+					CALL_MUX_NO_RET(fconn->conn->mux, destroy(fconn));
 					TRACE_DEVEL("outgoing connection killed", FCGI_EV_STRM_END|FCGI_EV_FCONN_ERR);
 					return;
 				}
@@ -3778,7 +3749,7 @@ static void fcgi_detach(struct sedesc *sd)
 
 				/* Ensure session can keep a new idle connection. */
 				if (session_check_idle_conn(sess, fconn->conn) != 0) {
-					fconn->conn->mux->destroy(fconn);
+					CALL_MUX_NO_RET(fconn->conn->mux, destroy(fconn));
 					TRACE_DEVEL("outgoing connection killed", FCGI_EV_STRM_END|FCGI_EV_FCONN_ERR);
 					return;
 				}
@@ -3809,7 +3780,7 @@ static void fcgi_detach(struct sedesc *sd)
 
 				if (!srv_add_to_idle_list(objt_server(fconn->conn->target), fconn->conn, 1)) {
 					/* The server doesn't want it, let's kill the connection right away */
-					fconn->conn->mux->destroy(fconn);
+					CALL_MUX_NO_RET(fconn->conn->mux, destroy(fconn));
 					TRACE_DEVEL("outgoing connection killed", FCGI_EV_STRM_END|FCGI_EV_FCONN_ERR);
 					return;
 				}

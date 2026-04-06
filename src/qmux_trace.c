@@ -143,18 +143,19 @@ static char *qcc_app_st_to_str(const enum qcc_app_st st)
 
 void qmux_dump_qcc_info(struct buffer *msg, const struct qcc *qcc)
 {
-	const struct quic_conn *qc = qcc->conn->handle.qc;
+	const struct quic_conn *qc = conn_is_quic(qcc->conn) ? qcc->conn->handle.qc : NULL;
 
 	chunk_appendf(msg, " qcc=%p(%c)", qcc, (qcc->flags & QC_CF_IS_BACK) ? 'B' : 'F');
-	if (qcc->conn->handle.qc)
+	if (qc)
 		chunk_appendf(msg, " qc=%p", qcc->conn->handle.qc);
 	chunk_appendf(msg, " .st=%s .sc=%llu .hreq=%llu .flg=0x%04x",
 	              qcc_app_st_to_str(qcc->app_st), (ullong)qcc->nb_sc,
 	              (ullong)qcc->nb_hreq, qcc->flags);
 
-	chunk_appendf(msg, " .tx=%llu %llu/%llu bwnd=%llu/%llu",
-	              (ullong)qcc->tx.fc.off_soft, (ullong)qcc->tx.fc.off_real, (ullong)qcc->tx.fc.limit,
-	              (ullong)qcc->tx.buf_in_flight, (ullong)qc->path->cwnd);
+	chunk_appendf(msg, " .tx=%llu %llu/%llu",
+	              (ullong)qcc->tx.fc.off_soft, (ullong)qcc->tx.fc.off_real, (ullong)qcc->tx.fc.limit);
+	if (qc)
+		chunk_appendf(msg, " bwnd=%llu/%llu", (ullong)qcc->tx.buf_in_flight, (ullong)qc->path->cwnd);
 }
 
 void qmux_dump_qcs_info(struct buffer *msg, const struct qcs *qcs)
@@ -169,8 +170,8 @@ void qmux_dump_qcs_info(struct buffer *msg, const struct qcs *qcs)
 	                                          (ullong)qcs->tx.fc.off_real,
 	                                          (ullong)qcs->tx.fc.limit);
 
-	if (qcs->stream)
-		bdata_ctr_print(msg, &qcs->stream->data, " buf=");
+	if (conn_is_quic(qcs->qcc->conn) && qcs->tx.stream)
+		bdata_ctr_print(msg, &qcs->tx.stream->data, " buf=");
 
 	chunk_appendf(msg, " .ti=%u/%u/%u",
 	              tot_time_read(&qcs->timer.base),

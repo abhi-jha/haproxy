@@ -63,6 +63,7 @@
 #include <haproxy/global.h>
 #include <haproxy/http_ana.h>
 #include <haproxy/http_rules.h>
+#include <haproxy/http_htx.h>
 #include <haproxy/lb_chash.h>
 #include <haproxy/lb_fas.h>
 #include <haproxy/lb_fwlc.h>
@@ -88,7 +89,6 @@
 #include <haproxy/sample.h>
 #include <haproxy/server.h>
 #include <haproxy/session.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stick_table.h>
 #include <haproxy/stream.h>
 #include <haproxy/task.h>
@@ -2319,6 +2319,18 @@ int check_config_validity()
 				   "Please fix either value to remove this warning.\n",
 				   global.tune.bufsize_large, global.tune.bufsize);
 			global.tune.bufsize_large = 0;
+			err_code |= ERR_WARN;
+		}
+	}
+
+	if (global.tune.bufsize_small > 0) {
+		if (global.tune.bufsize_small == global.tune.bufsize)
+			global.tune.bufsize_small = 0;
+		else if (global.tune.bufsize_small > global.tune.bufsize) {
+			ha_warning("invalid small buffer size %d bytes which is greater to default bufsize %d bytes.\n",
+				   global.tune.bufsize_small, global.tune.bufsize);
+			global.tune.bufsize_small = 0;
+			err_code |= ERR_WARN;
 		}
 	}
 
@@ -2378,6 +2390,9 @@ int check_config_validity()
 		cfgerr += check_action_rules(&defpx->http_req_rules, defpx, &err_code);
 		cfgerr += check_action_rules(&defpx->http_res_rules, defpx, &err_code);
 		cfgerr += check_action_rules(&defpx->http_after_res_rules, defpx, &err_code);
+#ifdef USE_QUIC
+		cfgerr += check_action_rules(&defpx->quic_init_rules, defpx, &err_code);
+#endif
 
 		err = NULL;
 		i = smp_resolve_args(defpx, &err);
@@ -2390,6 +2405,8 @@ int check_config_validity()
 		else {
 			cfgerr += acl_find_targets(defpx);
 		}
+
+		err_code |= proxy_check_http_errors(defpx);
 	}
 
 	/* starting to initialize the main proxies list */

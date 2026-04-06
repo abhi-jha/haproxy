@@ -1147,10 +1147,13 @@ void dump_hex(struct buffer *out, const char *pfx, const void *buf, int len, int
 int may_access(const void *ptr);
 const void *resolve_sym_name(struct buffer *buf, const char *pfx, const void *addr);
 const void *resolve_dso_name(struct buffer *buf, const char *pfx, const void *addr);
+void make_tar_header(char *output, const char *pfx, const char *fname, const char *link, size_t size, mode_t mode);
+int load_file_into_tar(char **storage, size_t *size, const char *pfx, const char *fname, const char *input, const char *link);
 const char *get_exec_path(void);
 void *get_sym_curr_addr(const char *name);
 void *get_sym_next_addr(const char *name);
 int dump_libs(struct buffer *output, int with_addr);
+void collect_libs(void);
 
 /* Note that this may result in opening libgcc() on first call, so it may need
  * to have been called once before chrooting.
@@ -1324,6 +1327,62 @@ static inline uint statistical_prng_range(uint range)
 	return mul32hi(statistical_prng(), range ? range - 1 : 0);
 }
 
+/* The functions below are used to hash one or two pointers together and reduce
+ * the result to fit into a given number of bits. The first part is made of a
+ * multiplication (and possibly an addition) by one or two prime numbers giving
+ * a 64-bit number whose center bits are the most distributed, and the second
+ * part will reuse this value and return a mix of the most variable bits that
+ * fits in the requested size. The most convenient approach is to directly
+ * call ptr_hash() / ptr2_hash(), though for some specific use cases where a
+ * second value could be useful, one may prefer to call the lower level
+ * operations instead.
+ */
+
+/* reduce a 64-bit pointer hash to <bits> bits */
+static forceinline uint _ptr_hash_reduce(unsigned long long x, const int bits)
+{
+	if (!bits)
+		return 0;
+
+	if (sizeof(long) == 4)
+		x ^= x >> 32;
+	else
+		x >>= 31 - (bits + 1) / 2;
+	return x & (~0U >> (-bits & 31));
+}
+
+/* single-pointer version, low-level, use ptr_hash() instead */
+static forceinline ullong _ptr_hash(const void *p)
+{
+	unsigned long long x = (unsigned long)p;
+
+	x *= 0xacd1be85U;
+	return x;
+}
+
+/* two-pointer version, low-level, use ptr2_hash() instead */
+static forceinline ullong _ptr2_hash(const void *p1, const void *p2)
+{
+	unsigned long long x = (unsigned long)p1;
+	unsigned long long y = (unsigned long)p2;
+
+	x *= 0xacd1be85U;
+	y *= 0x9d28e4e9U;
+	return x ^ y;
+}
+
+/* two-pointer plus arg version, low-level, use ptr2_hash_arg() instead */
+static forceinline ullong _ptr2_hash_arg(const void *p1, const void *p2, ulong arg)
+{
+	unsigned long long x = (unsigned long)p1;
+	unsigned long long y = (unsigned long)p2;
+
+	x *= 0xacd1be85U;
+	x += arg;
+	y *= 0x9d28e4e9U;
+	return x ^ y;
+}
+
 /* returns a hash on <bits> bits of pointer <p> that is suitable for being used
  * to compute statistic buckets, in that it's fast and reasonably distributed
  * thanks to mixing the bits via a multiplication by a prime number and using
@@ -1337,17 +1396,7 @@ static inline uint statistical_prng_range(uint range)
  */
 static forceinline uint ptr_hash(const void *p, const int bits)
 {
-	unsigned long long x = (unsigned long)p;
-
-	if (!bits)
-		return 0;
-
-	x *= 0xacd1be85U;
-	if (sizeof(long) == 4)
-		x ^= x >> 32;
-	else
-		x >>= 31 - (bits + 1) / 2;
-	return x & (~0U >> (-bits & 31));
+	return _ptr_hash_reduce(_ptr_hash(p), bits);
 }
 
 /* Same as above but works on two pointers. It will return the same values
@@ -1355,20 +1404,15 @@ static forceinline uint ptr_hash(const void *p, const int bits)
  */
 static forceinline uint ptr2_hash(const void *p1, const void *p2, const int bits)
 {
-	unsigned long long x = (unsigned long)p1;
-	unsigned long long y = (unsigned long)p2;
+	return _ptr_hash_reduce(_ptr2_hash(p1, p2), bits);
+}
 
-	if (!bits)
-		return 0;
-
-	x *= 0xacd1be85U;
-	y *= 0x9d28e4e9U;
-	x ^= y;
-	if (sizeof(long) == 4)
-		x ^= x >> 32;
-	else
-		x >>= 33 - bits / 2;
-	return x & (~0U >> (-bits & 31));
+/* Same as above but works on two pointers and a long argument. It will return
+ * the same values if the second pointer is NULL.
+ */
+static forceinline uint ptr2_hash_arg(const void *p1, const void *p2, ulong arg, const int bits)
+{
+	return _ptr_hash_reduce(_ptr2_hash_arg(p1, p2, arg), bits);
 }
 
 
@@ -1498,5 +1542,7 @@ int path_base(const char *path, const char *base, char *dst, char **err);
 void ha_freearray(char ***array);
 
 void ha_memset_s(void *s, int c, size_t n);
+
+void chunk_append_thread_ctx(struct buffer *output, const struct thread_exec_ctx *ctx, const char *pfx, const char *sfx);
 
 #endif /* _HAPROXY_TOOLS_H */

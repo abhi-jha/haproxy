@@ -36,7 +36,7 @@ extern struct action_kw_list tcp_check_keywords;
 extern struct pool_head *pool_head_tcpcheck_rule;
 
 int tcpcheck_get_step_id(const struct check *check, const struct tcpcheck_rule *rule);
-struct tcpcheck_rule *get_first_tcpcheck_rule(const struct tcpcheck_rules *rules);
+struct tcpcheck_rule *get_first_tcpcheck_rule(const struct tcpcheck_ruleset *rs);
 
 struct tcpcheck_ruleset *create_tcpcheck_ruleset(const char *name);
 struct tcpcheck_ruleset *find_tcpcheck_ruleset(const char *name);
@@ -50,9 +50,9 @@ void free_tcpcheck_var(struct tcpcheck_var *var);
 int dup_tcpcheck_vars(struct list *dst, const struct list *src);
 void free_tcpcheck_vars(struct list *vars);
 
-int add_tcpcheck_expect_str(struct tcpcheck_rules *rules, const char *str);
-int add_tcpcheck_send_strs(struct tcpcheck_rules *rules, const char * const *strs);
-int tcpcheck_add_http_rule(struct tcpcheck_rule *chk, struct tcpcheck_rules *rules, char **errmsg);
+int add_tcpcheck_expect_str(struct tcpcheck_ruleset *rs, const char *str);
+int add_tcpcheck_send_strs(struct tcpcheck_ruleset *rs, const char * const *strs);
+int tcpcheck_add_http_rule(struct tcpcheck_rule *chk, struct tcpcheck_ruleset *rs, char **errmsg);
 
 void free_tcpcheck_http_hdr(struct tcpcheck_http_hdr *hdr);
 
@@ -106,6 +106,8 @@ int proxy_parse_spop_check_opt(char **args, int cur_arg, struct proxy *curpx, co
 int proxy_parse_httpchk_opt(char **args, int cur_arg, struct proxy *curpx, const struct proxy *defpx,
 			    const char *file, int line);
 
+int check_server_tcpcheck(struct server *srv);
+
 void tcp_check_keywords_register(struct action_kw_list *kw_list);
 
 /* Return the struct action_kw associated to a keyword */
@@ -133,6 +135,22 @@ static inline int tcpchk_rules_type_to_proto_mode(int tcpchk_rules_type)
 	return mode;
 }
 
+static inline const char *tcpcheck_ruleset_type_to_str(struct tcpcheck_ruleset *rs)
+{
+	switch (rs->flags & TCPCHK_RULES_PROTO_CHK) {
+		case TCPCHK_RULES_PGSQL_CHK: return "PGSQL"; break;
+		case TCPCHK_RULES_REDIS_CHK: return "REDIS"; break;
+		case TCPCHK_RULES_SMTP_CHK:  return "SMTP";  break;
+		case TCPCHK_RULES_HTTP_CHK:  return "HTTP";  break;
+		case TCPCHK_RULES_MYSQL_CHK: return "MYSQL"; break;
+		case TCPCHK_RULES_LDAP_CHK:  return "LDAP";  break;
+		case TCPCHK_RULES_SSL3_CHK:  return "SSL3";  break;
+		case TCPCHK_RULES_AGENT_CHK: return "AGENT"; break;
+		case TCPCHK_RULES_SPOP_CHK:  return "SPOP";  break;
+		case TCPCHK_RULES_TCP_CHK:   return "TCP";   break;
+		default:                     return "???"; break;
+	}
+}
 #endif /* _HAPROXY_TCPCHECK_H */
 
 /*

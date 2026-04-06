@@ -50,7 +50,6 @@
 #include <haproxy/resolvers.h>
 #include <haproxy/sample.h>
 #include <haproxy/session.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stconn.h>
 #include <haproxy/stick_table.h>
 #include <haproxy/stream.h>
@@ -1118,10 +1117,8 @@ enum act_return process_use_service(struct act_rule *rule, struct proxy *px,
 			return ACT_RET_ERR;
 
 		/* Finish initialisation of the context. */
-		s->current_rule = rule;
 		if (appctx_init(appctx) == -1)
 			return ACT_RET_ERR;
-		s->current_rule = NULL;
 	}
 	else
 		appctx = __sc_appctx(s->scb);
@@ -1141,12 +1138,12 @@ enum act_return process_use_service(struct act_rule *rule, struct proxy *px,
 	return ACT_RET_STOP;
 }
 
-/* Parses persist-rules attached to <fe> frontend and report the first macthing
+/* Parses persist-rules attached to <fe> frontend and report the first matching
  * entry, using <sess> session and <s> stream as sample source.
  *
  * As this function is called several times in the same stream context,
  * <persist> will act as a caching value to avoid reprocessing of a similar
- * ruleset. It must be set to a negative value for the first invokation.
+ * ruleset. It must be set to a negative value for the first invocation.
  *
  * Returns 1 if a rule matches, else 0.
  */
@@ -1897,6 +1894,10 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 					 SF_ERR_KILLED));
 	}
 
+	/* we're starting to work with this endpoint, let's flag it */
+	if (unlikely(!sc_ep_test(scf, SE_FL_APP_STARTED)))
+		sc_ep_set(scf, SE_FL_APP_STARTED);
+
 	/* First, attempt to receive pending data from I/O layers */
 	sc_sync_recv(scf);
 	sc_sync_recv(scb);
@@ -2514,6 +2515,29 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 			srv = objt_server(s->target);
 			if (scb->state == SC_ST_ASS && srv && srv->rdr_len && (s->flags & SF_REDIRECTABLE))
 				http_perform_server_redirect(s, scb);
+
+			if (unlikely((s->be->options2 & PR_O2_USE_SBUF_QUEUE) && scb->state == SC_ST_QUE)) {
+				struct buffer sbuf = BUF_NULL;
+
+				if (IS_HTX_STRM(s)) {
+					if (!htx_move_to_small_buffer(&sbuf, &req->buf))
+						break;
+				}
+				else {
+					if (b_size(&req->buf) == global.tune.bufsize_small ||
+					    b_data(&req->buf) > global.tune.bufsize_small)
+						break;
+					if (!b_alloc_small(&sbuf))
+						break;
+					b_xfer(&sbuf, &req->buf, b_data(&req->buf));
+				}
+
+				b_free(&req->buf);
+				offer_buffers(s, 1);
+				req->buf = sbuf;
+				DBG_TRACE_DEVEL("request moved to a small buffer", STRM_EV_STRM_PROC, s);
+			}
+
 		} while (scb->state == SC_ST_ASS);
 	}
 
@@ -2837,10 +2861,10 @@ void stream_update_time_stats(struct stream *s)
 		swrate_add_dynamic(&srv->counters.c_time, samples_window, t_connect);
 		swrate_add_dynamic(&srv->counters.d_time, samples_window, t_data);
 		swrate_add_dynamic(&srv->counters.t_time, samples_window, t_close);
-		HA_ATOMIC_UPDATE_MAX(&srv->counters.qtime_max, t_queue);
-		HA_ATOMIC_UPDATE_MAX(&srv->counters.ctime_max, t_connect);
-		HA_ATOMIC_UPDATE_MAX(&srv->counters.dtime_max, t_data);
-		HA_ATOMIC_UPDATE_MAX(&srv->counters.ttime_max, t_close);
+		COUNTERS_UPDATE_MAX(&srv->counters.qtime_max, t_queue);
+		COUNTERS_UPDATE_MAX(&srv->counters.ctime_max, t_connect);
+		COUNTERS_UPDATE_MAX(&srv->counters.dtime_max, t_data);
+		COUNTERS_UPDATE_MAX(&srv->counters.ttime_max, t_close);
 	}
 	if (s->be_tgcounters)
 		samples_window = (((s->be->mode == PR_MODE_HTTP) ?
@@ -2851,10 +2875,10 @@ void stream_update_time_stats(struct stream *s)
 	swrate_add_dynamic(&s->be->be_counters.c_time, samples_window, t_connect);
 	swrate_add_dynamic(&s->be->be_counters.d_time, samples_window, t_data);
 	swrate_add_dynamic(&s->be->be_counters.t_time, samples_window, t_close);
-	HA_ATOMIC_UPDATE_MAX(&s->be->be_counters.qtime_max, t_queue);
-	HA_ATOMIC_UPDATE_MAX(&s->be->be_counters.ctime_max, t_connect);
-	HA_ATOMIC_UPDATE_MAX(&s->be->be_counters.dtime_max, t_data);
-	HA_ATOMIC_UPDATE_MAX(&s->be->be_counters.ttime_max, t_close);
+	COUNTERS_UPDATE_MAX(&s->be->be_counters.qtime_max, t_queue);
+	COUNTERS_UPDATE_MAX(&s->be->be_counters.ctime_max, t_connect);
+	COUNTERS_UPDATE_MAX(&s->be->be_counters.dtime_max, t_data);
+	COUNTERS_UPDATE_MAX(&s->be->be_counters.ttime_max, t_close);
 }
 
 /*
@@ -3269,7 +3293,7 @@ static int check_tcp_switch_stream_mode(struct act_rule *rule, struct proxy *px,
 		px->options |= PR_O_HTTP_UPG;
 
 	if (mux_proto) {
-		mux_ent = conn_get_best_mux_entry(mux_proto->token, PROTO_SIDE_FE, mode);
+		mux_ent = conn_get_best_mux_entry(mux_proto->token, PROTO_SIDE_FE, 0, mode);
 		if (!mux_ent || !isteq(mux_ent->token, mux_proto->token)) {
 			memprintf(err, "MUX protocol '%.*s' is not compatible with the selected mode",
 				  (int)mux_proto->token.len, mux_proto->token.ptr);
@@ -3277,7 +3301,7 @@ static int check_tcp_switch_stream_mode(struct act_rule *rule, struct proxy *px,
 		}
 	}
 	else {
-		mux_ent = conn_get_best_mux_entry(IST_NULL, PROTO_SIDE_FE, mode);
+		mux_ent = conn_get_best_mux_entry(IST_NULL, PROTO_SIDE_FE, 0, mode);
 		if (!mux_ent) {
 			memprintf(err, "Unable to find compatible MUX protocol with the selected mode");
 			return 0;
@@ -3383,7 +3407,7 @@ static enum act_parse_ret stream_parse_use_service(const char **args, int *cur_a
 
 void service_keywords_register(struct action_kw_list *kw_list)
 {
-	LIST_APPEND(&service_keywords, &kw_list->list);
+	act_add_list(&service_keywords, kw_list);
 }
 
 struct action_kw *service_find(const char *kw)
@@ -3673,12 +3697,11 @@ static void __strm_dump_to_buffer(struct buffer *buf, const struct show_sess_ctx
 		}
 
 		chunk_appendf(buf,
-		              "%s      co0=%p ctrl=%s xprt=%s mux=%s data=%s target=%s:%p\n", pfx,
+		              "%s      co0=%p ctrl=%s xprt=%s mux=%s target=%s:%p\n", pfx,
 			      conn,
 			      conn_get_ctrl_name(conn),
 			      conn_get_xprt_name(conn),
 			      conn_get_mux_name(conn),
-			      sc_get_data_name(scf),
 		              obj_type_name(conn->target),
 		              obj_base_ptr(conn->target));
 
@@ -3735,12 +3758,11 @@ static void __strm_dump_to_buffer(struct buffer *buf, const struct show_sess_ctx
 		}
 
 		chunk_appendf(buf,
-		              "%s      co1=%p ctrl=%s xprt=%s mux=%s data=%s target=%s:%p\n", pfx,
+		              "%s      co1=%p ctrl=%s xprt=%s mux=%s target=%s:%p\n", pfx,
 			      conn,
 			      conn_get_ctrl_name(conn),
 			      conn_get_xprt_name(conn),
 			      conn_get_mux_name(conn),
-			      sc_get_data_name(scb),
 		              obj_type_name(conn->target),
 		              obj_base_ptr(conn->target));
 
@@ -3804,8 +3826,9 @@ static void __strm_dump_to_buffer(struct buffer *buf, const struct show_sess_ctx
 	if (HAS_FILTERS(strm) && strm->req.flt.current) {
 		const struct filter *flt = strm->req.flt.current;
 
-		chunk_appendf(buf, "%s      current_filter=%p (id=\"%s\" flags=0x%x pre=0x%x post=0x%x) \n", pfx,
-			      flt, flt->config->id, flt->flags, flt->pre_analyzers, flt->post_analyzers);
+		chunk_appendf(buf, "%s      current_filter=%p (id=\"%s\" flags=0x%x pre=0x%x post=0x%x %s) \n", pfx,
+			      flt, flt->config->id, flt->flags, flt->pre_analyzers, flt->post_analyzers,
+			      (flt == strm->waiting_entity.ptr) ? "YIELDING" : "RUNNING");
 	}
 
 	chunk_appendf(buf,
@@ -3837,13 +3860,16 @@ static void __strm_dump_to_buffer(struct buffer *buf, const struct show_sess_ctx
 	if (HAS_FILTERS(strm) && strm->res.flt.current) {
 		const struct filter *flt = strm->res.flt.current;
 
-		chunk_appendf(buf, "%s      current_filter=%p (id=\"%s\" flags=0x%x pre=0x%x post=0x%x) \n", pfx,
-			      flt, flt->config->id, flt->flags, flt->pre_analyzers, flt->post_analyzers);
+		chunk_appendf(buf, "%s      current_filter=%p (id=\"%s\" flags=0x%x pre=0x%x post=0x%x %s) \n", pfx,
+			      flt, flt->config->id, flt->flags, flt->pre_analyzers, flt->post_analyzers,
+			      (flt == strm->waiting_entity.ptr) ? "YIELDING" : "RUNNING");
 	}
 
 	if (strm->current_rule_list && strm->current_rule) {
 		const struct act_rule *rule = strm->current_rule;
-		chunk_appendf(buf, "%s  current_rule=\"%s\" [%s:%d]\n", pfx, rule->kw->kw, rule->conf.file, rule->conf.line);
+		chunk_appendf(buf, "%s  current_rule=\"%s\" [%s:%d] (%s)\n",
+			      pfx, rule->kw ? rule->kw->kw : "?", rule->conf.file, rule->conf.line,
+			      (rule == strm->waiting_entity.ptr) ? "YIELDING" : "RUNNING");
 	}
 }
 

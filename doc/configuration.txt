@@ -3,7 +3,7 @@
                           Configuration Manual
                          ----------------------
                               version 3.4
-                              2026/02/19
+                              2026/04/03
 
 
 This document covers the configuration language as implemented in the version
@@ -990,23 +990,26 @@ within conditional blocks and not to reference them in the global section's
 The table below summaries the status of each variable for the different working
 modes:
 
-  +--------------------------+---------+------------+-----------+
-  |        variable          | usable  | modifiable |  listed   |
-  |                          +---------+------------+-----------+
-  |                          |  M | W  |   M  |  W  |  M  |  W  |
-  +--------------------------+----+----+------+-----+-----+-----+
-  | HAPROXY_STARTUP_VERSION  |  X | X  |      |     |  X  |  X  |
-  | HAPROXY_BRANCH           |  X | X  |      |     |  X  |  X  |
-  | HAPROXY_CFGFILES         |    |    |      |     |  X  |  X  |
-  | HAPROXY_MWORKER          |    |    |      |     |  X  |  X  |
-  | HAPROXY_CLI              |    |    |      |     |     |  X  |
-  | HAPROXY_MASTER_CLI       |    |    |      |     |  X  |     |
-  | HAPROXY_LOCALPEER        |    | X  |      |     |     |  X  |
-  | HAPROXY_HTTP_LOG_FMT     |    | X  |      |  X  |     |     |
-  | HAPROXY_HTTP_CLF_LOG_FMT |    | X  |      |  X  |     |     |
-  | HAPROXY_HTTPS_LOG_FMT    |    | X  |      |  X  |     |     |
-  | HAPROXY_TCP_LOG_FMT      |    | X  |      |  X  |     |     |
-  +--------------------------+----+----+------+-----+-----+-----+
+  +---------------------------+---------+------------+-----------+
+  |          variable         | usable  | modifiable |  listed   |
+  |                           +---------+------------+-----------+
+  |                           |  M | W  |   M  |  W  |  M  |  W  |
+  +---------------------------+----+----+------+-----+-----+-----+
+  | HAPROXY_STARTUP_VERSION   |  X | X  |      |     |  X  |  X  |
+  | HAPROXY_BRANCH            |  X | X  |      |     |  X  |  X  |
+  | HAPROXY_CFGFILES          |    |    |      |     |  X  |  X  |
+  | HAPROXY_MWORKER           |    |    |      |     |  X  |  X  |
+  | HAPROXY_CLI               |    |    |      |     |     |  X  |
+  | HAPROXY_MASTER_CLI        |    |    |      |     |  X  |     |
+  | HAPROXY_LOCALPEER         |    | X  |      |     |     |  X  |
+  | HAPROXY_HTTP_LOG_FMT      |    | X  |      |  X  |     |     |
+  | HAPROXY_HTTP_CLF_LOG_FMT  |    | X  |      |  X  |     |     |
+  | HAPROXY_HTTPS_LOG_FMT     |    | X  |      |  X  |     |     |
+  | HAPROXY_TCP_LOG_FMT       |    | X  |      |  X  |     |     |
+  | HAPROXY_TCP_CLF_LOG_FMT   |    | X  |      |  X  |     |     |
+  | HAPROXY_KEYLOG_FC_LOG_FMT |    | X  |      |  X  |     |     |
+  | HAPROXY_KEYLOG_BC_LOG_FMT |    | X  |      |  X  |     |     |
+  +---------------------------+----+----+------+-----+-----+-----+
 
 The variables in question are the following:
 
@@ -1038,6 +1041,16 @@ The variables in question are the following:
 
   * HAPROXY_TCP_CLF_LOG_FMT: similar to HAPROXY_HTTP_CLF_LOG_FMT but for TCP
     CLF log format as defined in section 8.2.2 "TCP log format".
+
+  * HAPROXY_KEYLOG_FC_LOG_FMT: contains the keylog format for the frontend
+    (client-facing) TLS connection, with key entries separated by newlines so
+    it might not be compatible with your syslog server. "tune.ssl.keylog on" is
+    required.
+
+  * HAPROXY_KEYLOG_BC_LOG_FMT: similar to HAPROXY_KEYLOG_FC_LOG_FMT but for the
+    backend (server-facing) TLS connection. Key entries are separated by
+    newlines so it might not be compatible with your syslog server.
+    "tune.ssl.keylog on" is required.
 
   * HAPROXY_MWORKER: In master-worker mode, this variable is set to 1.
 
@@ -1725,7 +1738,7 @@ Assuming haproxy is in $PATH, test these configurations in a shell with:
     $ sudo haproxy -f configuration.conf -c
 
 
-3. Global parameters
+3. Global section
 --------------------
 
 Parameters in the "global" section are process-wide and often OS-specific. They
@@ -1886,10 +1899,13 @@ The following keywords are supported in the "global" section :
    - tune.h2.be.glitches-threshold
    - tune.h2.be.initial-window-size
    - tune.h2.be.max-concurrent-streams
+   - tune.h2.be.max-frames-at-once
    - tune.h2.be.rxbuf
    - tune.h2.fe.glitches-threshold
    - tune.h2.fe.initial-window-size
    - tune.h2.fe.max-concurrent-streams
+   - tune.h2.fe.max-frames-at-once
+   - tune.h2.fe.max-rst-at-once
    - tune.h2.fe.max-total-streams
    - tune.h2.fe.rxbuf
    - tune.h2.header-table-size
@@ -3148,10 +3164,29 @@ server-state-file <file>
   configuration. See also "server-state-base" and "show servers state",
   "load-server-state-from-file" and "server-state-file-name"
 
-set-dumpable
+set-dumpable [ on | off | libs ]
+  This option helps choose the core dump behavior in case of process crash.
+  Available options are:
+
+  - on      this enables core dumping at the process level if it was
+            previously disabled.
+
+  - off     this disables a previously enabled core dumping.
+
+  - libs    this enables core dumping with an embedded copy of the binaries and
+            libraries that are required for debugging. This may be requested by
+            developers. In this case haproxy will try to load the libraries it
+            depends on into memory and keep them preciously. If the process
+            crashes, they will be dumped into the core so there is no need for
+            retrieving them from the file system anymore and no risk that they
+            do not match the core. This takes a few megabytes to a few tens of
+            megabytes of additional RAM, so it is better not to use it on small
+            systems.
+
   This option is better left disabled by default and enabled only upon a
-  developer's request. If it has been enabled, it may still be forcibly
-  disabled by prefixing it with the "no" keyword. It has no impact on
+  developer's request. By default it is disabled. Without argument, it defaults
+  to "on". If it has been enabled, it may still be forcibly disabled by prefixing
+  it with the "no" keyword or by setting it to "off". It has no impact on
   performance nor stability but will try hard to re-enable core dumps that were
   possibly disabled by file size limitations (ulimit -f), core size limitations
   (ulimit -c), or "dumpability" of a process after changing its UID/GID (such
@@ -3603,6 +3638,11 @@ ssl-skip-self-issued-ca
   with 'issuers-chain-path'. This concerns all certificates without intermediate
   certificates. It's useless for BoringSSL, .issuer is ignored because ocsp
   bits does not need it. Requires at least OpenSSL 1.0.2.
+
+stats calculate-max-counters [on|off]
+  Activates or deactivates the calculation of stats max counters. If you
+  don't need them, deactivating them may increase performances a bit.
+  The default is on.
 
 stats maxconn <connections>
   By default, the stats socket is limited to 10 concurrent connections. It is
@@ -4138,8 +4178,11 @@ tune.bufsize.small <size>
   If however a small buffer is not sufficient, a reallocation is automatically
   done to switch to a standard size buffer.
 
-  For the moment, it is used only by HTTP/3 protocol to emit the response
-  headers.
+  For the moment, it is automatically used only by HTTP/3 protocol to emit the
+  response headers. Otherwise, small buffers support can be enabled for
+  specific proxies via the "use-small-buffers" option.
+
+  See also: option use-small-buffers
 
 tune.comp.maxlevel <number>
   Sets the maximum compression level. The compression level affects CPU
@@ -4344,6 +4387,13 @@ tune.h2.be.max-concurrent-streams <number>
   case). It is highly recommended not to increase this value; some might find
   it optimal to run at low values (1..5 typically).
 
+tune.h2.be.max-frames-at-once <number>
+  Sets the maximum number of HTTP/2 incoming frames that will be processed at
+  once on a backend connection. It can be useful to set this to a low value
+  (a few tens to a few hundreds) when dealing with very large buffers in order
+  to maintain a low latency and a better fairness between multiple connections.
+  The default value is zero, which means that no limitation is enforced.
+
 tune.h2.be.rxbuf <size>
   Sets the HTTP/2 receive buffer size for outgoing connections, in bytes. This
   size will be rounded up to the next multiple of tune.bufsize and will be
@@ -4394,7 +4444,7 @@ tune.h2.fe.initial-window-size <number>
 
   See also: tune.h2.initial-window-size.
 
-tune.h2.fe.max-concurrent-streams <number>
+tune.h2.fe.max-concurrent-streams <number> [args...]
   Sets the HTTP/2 maximum number of concurrent streams per incoming connection
   (i.e. the number of outstanding requests on a single connection from a
   client). When not set, the default set by tune.h2.max-concurrent-streams
@@ -4402,7 +4452,56 @@ tune.h2.fe.max-concurrent-streams <number>
   the page load time for complex sites with lots of small objects over high
   latency networks but can also result in using more memory by allowing a
   client to allocate more resources at once. The default value of 100 is
-  generally good and it is recommended not to change this value.
+  generally good and it is recommended not to change this value. A larger
+  concurrency also has an impact on the processing load and latency when
+  dealing with large numbers of connections which are themselves using many
+  streams, and it may lower the barrier to denial of service attacks. The
+  command supports the following optional arguments after the number:
+
+  - rq-load { <number> | auto | ignore }:
+    The optional argument "rq-load" permits to dynamically adjust the
+    advertised concurrency based on the executing thread's run-queue load:
+    as long as the thread's load remains below the indicated threshold, the
+    configured streams limit will be advertised. When the thread's load
+    increases beyond the configured limit, the advertised streams limit will be
+    decreased proportionally to the square of the excess ratio. Target load
+    levels between 50 and 100 generally show very good moderation under heavy
+    loads. Alternately, instead of specifying an explicit number, the keyword
+    accepts "ignore", which is the default and means that the thread's
+    run-queue load will not be considered to moderate the advertised streams
+    limit, and "auto", which sets the limit to the "tune.runqueue-depth"
+    value, which generally provides good results without having to tweak
+    the configuration any further.
+
+  - min <number>:
+    This sets the minimum advertised concurrency level when rq-load is used,
+    even if this results in a higher load than the configured target. This
+    allows to maintain a good level of interactivity on a site under very
+    heavy load. The minimum and default value is 1, but values between 5
+    and 15 can improve user experience.
+
+  Example:
+
+     tune.h2.fe.max-concurrent-streams 100 rq-load auto min 15
+
+tune.h2.fe.max-frames-at-once <number>
+  Sets the maximum number of HTTP/2 incoming frames that will be processed at
+  once on a frontend connection. It can be useful to set this to a low value
+  (a few tens to a few hundreds) when dealing with very large buffers in order
+  to maintain a low latency and a better fairness between multiple connections.
+  The default value is zero, which means that no limitation is enforced.
+
+tune.h2.fe.max-rst-at-once <number>
+  Sets the maximum number of HTTP/2 incoming RST_STREAM that will be processed
+  at once on a frontend connection. Once the specified number of RST_STREAM
+  frames are received, the connection handler will be placed in a low priority
+  queue and be processed after all other tasks. It can be useful to set this to
+  a very low value (1 or a few units) to significantly reduce the impacts of
+  RST_STREAM floods. RST_STREAM do happen when a user clicks on the Stop button
+  in their browser, but the few extra milliseconds caused by this requeuing are
+  generally unnoticeable, however they are generally effective at significantly
+  lowering the load caused from such floods. The default value is zero, which
+  means that no limitation is enforced.
 
 tune.h2.fe.max-total-streams <number>
   Sets the HTTP/2 maximum number of total streams processed per incoming
@@ -4478,6 +4577,16 @@ tune.h2.initial-window-size <number>
   specific settings tune.h2.fe.initial-window-size and
   tune.h2.be.initial-window-size.
 
+tune.h2.log-errors { none | connection | stream }
+  Sets the level of errors in the H2 demultiplexer that will generate a log.
+  The default is "stream", which means that any decoding error encountered in
+  the demultiplexer will lead to the emission of a log. The "connection" value
+  indicates that only logs that result in invalidating the connection will
+  produce a log. Finally, "none" indicates that no decoding error will produce
+  any log. It is recommended to set at least "connection" in order to detect
+  protocol anomalies, even if this means temporarily switching to "none" during
+  difficult periods.
+
 tune.h2.max-concurrent-streams <number>
   Sets the default HTTP/2 maximum number of concurrent streams per connection
   (i.e. the number of outstanding requests on a single connection). This value
@@ -4540,22 +4649,22 @@ tune.http.maxhdr <number>
   protocols. This limit is large enough but not documented on purpose. The same
   limit is applied on the first steps of the decoding for the same reason.
 
-tune.idle-pool.shared { on | off }
-  Enables ('on') or disables ('off') sharing of idle connection pools between
-  threads for a same server. The default is to share them between threads in
-  order to minimize the number of persistent connections to a server, and to
-  optimize the connection reuse rate. But to help with debugging or when
+tune.idle-pool.shared { full | on | off }
+  Controls sharing idle connection pools between threads for a same server.
+  It can be enabled for all threads in a same thread group ('on'), enabled for
+  all threads ('full') or disabled ('off'). The default is to share them
+  between threads in the same thread group ('on'), in order to minimize the
+  number of persistent connections to a server, and to optimize the connection
+  reuse rate. Sharing with threads from other thread groups can have a
+  performance impact, and is not enabled by default, but can be useful if
+  maximizing connection reuse is a priority. To help with debugging or when
   suspecting a bug in HAProxy around connection reuse, it can be convenient to
-  forcefully disable this idle pool sharing between multiple threads, and force
-  this option to "off". The default is on. It is strongly recommended against
-  disabling this option without setting a conservative value on "pool-low-conn"
-  for all servers relying on connection reuse to achieve a high performance
-  level, otherwise connections might be closed very often as the thread count
-  increases. Note that in any case, connections are only shared between threads
-  of the same thread group. This means that systems with many NUMA nodes may
-  show slightly more persistent connections while machines with unified caches
-  and many CPU cores per node may experience higher CPU usage. In the latter
-  case, the "max-thread-per-group" tunable may be used to improve the behavior.
+  forcefully disable this idle pool sharing between multiple threads,
+  and force this option to "off". It is strongly recommended against disabling
+  this option without setting a conservative value on "pool-low-conn" for all
+  servers relying on connection reuse to achieve a high performance level,
+  otherwise connections might be closed very often as the thread count
+  increases.
 
 tune.idletimer <timeout>
   Sets the duration after which HAProxy will consider that an empty buffer is
@@ -5345,7 +5454,7 @@ tune.ssl.certificate-compression { auto | off }
 
   When set to "auto" it uses the default value of the TLS library.
 
-  With "off" it tries to explicitely disable the support of the feature.
+  With "off" it tries to explicitly disable the support of the feature.
   HAProxy won't try to send compressed certificates anymore nor accept
   compressed certificates.
 
@@ -5391,7 +5500,7 @@ tune.ssl.keylog { on | off }
   These sample fetches should be used to generate the SSLKEYLOGFILE that is
   required to decipher traffic with wireshark.
 
-  https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+  https://tlswg.org/sslkeylogfile/draft-ietf-tls-keylogfile.html
 
   The SSLKEYLOG is a series of lines which are formatted this way:
 
@@ -5434,6 +5543,12 @@ tune.ssl.keylog { on | off }
                 SERVER_TRAFFIC_SECRET_0 %[ssl_bc_client_random,hex] %[ssl_bc_server_traffic_secret_0]\n
                 EXPORTER_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_exporter_secret]\n
                 EARLY_EXPORTER_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_early_exporter_secret]"
+
+  HAProxy also provides the above formats as predefined environment variables
+  that can be used directly in a "log-format" directive:
+
+    $HAPROXY_KEYLOG_FC_LOG_FMT   frontend (client-facing) connection keys
+    $HAPROXY_KEYLOG_BC_LOG_FMT   backend (server-facing) connection keys
 
 tune.ssl.lifetime <timeout>
   Sets how long a cached SSL session may remain valid. This time is expressed
@@ -5491,6 +5606,9 @@ tune.takeover-other-tg-connections <value>
   connections.
   Note that using connections from other thread groups can occur performance
   penalties, so it should not be used unless really needed.
+  Note that this behavior is now controlled by tune.idle-pool.shared, and
+  this keyword is just there for compatibility with older configurations, and
+  will be deprecated.
 
 tune.vars.global-max-size <size>
 tune.vars.proc-max-size <size>
@@ -5878,9 +5996,12 @@ errorloc302                               X          X         X         X
 -- keyword -------------------------- defaults - frontend - listen -- backend -
 errorloc303                               X          X         X         X
 error-log-format                          X          X         X         -
+external-check command                    X          -         X         X
+external-check path                       X          -         X         X
 force-persist                             -          -         X         X
 force-be-switch                           -          X         X         -
 filter                                    -          X         X         X
+filter-sequence                           -          X         X         X
 fullconn                                  X          -         X         X
 guid                                      -          X         X         X
 hash-balance-factor                       X          -         X         X
@@ -5923,6 +6044,7 @@ option disable-h2-upgrade            (*)  X          X         X         -
 option dontlog-normal                (*)  X          X         X         -
 option dontlognull                   (*)  X          X         X         -
 -- keyword -------------------------- defaults - frontend - listen -- backend -
+option external-check                     X          -         X         X
 option forwardfor                         X          X         X         X
 option forwarded                     (*)  X          -         X         X
 option h1-case-adjust-bogus-client   (*)  X          X         X         -
@@ -5941,9 +6063,9 @@ option httpchk                            X          -         X         X
 option httpclose                     (*)  X          X         X         X
 option httplog                            X          X         X         -
 option httpslog                           X          X         X         -
+option idle-close-on-response        (*)  X          X         X         -
 option independent-streams           (*)  X          X         X         X
 option ldap-check                         X          -         X         X
-option external-check                     X          -         X         X
 option log-health-checks             (*)  X          -         X         X
 option log-separate-errors           (*)  X          X         X         -
 option logasap                       (*)  X          X         X         -
@@ -5970,9 +6092,7 @@ option tcp-smart-connect             (*)  X          -         X         X
 option tcpka                              X          X         X         X
 option tcplog                             X          X         X         -
 option transparent      (deprecated) (*)  X          -         X         X
-option idle-close-on-response        (*)  X          X         X         -
-external-check command                    X          -         X         X
-external-check path                       X          -         X         X
+option use-small-buffers             (*)  X          -         X         X
 persist rdp-cookie                        X          -         X         X
 quic-initial                              X (!)      X         X         -
 rate-limit sessions                       X          X         X         -
@@ -5998,6 +6118,7 @@ stats scope                               X          X         X         X
 stats show-desc                           X          X         X         X
 stats show-legends                        X          X         X         X
 stats show-node                           X          X         X         X
+stats show-version                        X          X         X         X
 stats uri                                 X          X         X         X
 -- keyword -------------------------- defaults - frontend - listen -- backend -
 stick match                               -          -         X         X
@@ -6920,11 +7041,15 @@ compression offload
 
   See also : "compression type", "compression algo", "compression direction"
 
-compression direction <direction>
+compression direction <direction> (deprecated)
   Makes haproxy able to compress both requests and responses.
   Valid values are "request", to compress only requests, "response", to
   compress only responses, or "both", when you want to compress both.
   The default value is "response".
+
+  This directive is only relevant when legacy "filter compression" was
+  enabled, as with explicit comp-req and comp-res filters compression
+  direction is redundant.
 
   May be used in the following contexts: http
 
@@ -7171,7 +7296,7 @@ default_backend <backend>
   used when no rule has matched. It generally is the dynamic backend which
   will catch all undetermined requests.
 
-  If a backend is disabled or unpublished, default_backend rules targetting it
+  If a backend is disabled or unpublished, default_backend rules targeting it
   will be ignored and stream processing will remain on the original proxy.
 
   Example :
@@ -7631,6 +7756,96 @@ force-persist { if | unless } <condition>
              and section 7 about ACL usage.
 
 
+external-check command <command>
+  Executable to run when performing an external-check
+
+  May be used in the following contexts: tcp, http, log
+
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+
+  Arguments :
+    <command> is the external command to run
+
+  The arguments passed to the to the command are:
+
+  <proxy_address> <proxy_port> <server_address> <server_port>
+
+  The <proxy_address> and <proxy_port> are derived from the first listener
+  that is either IPv4, IPv6 or a UNIX socket. In the case of a UNIX socket
+  listener the proxy_address will be the path of the socket and the
+  <proxy_port> will be the string "NOT_USED". In a backend section, it's not
+  possible to determine a listener, and both <proxy_address> and <proxy_port>
+  will have the string value "NOT_USED".
+
+  Some values are also provided through environment variables.
+
+  Environment variables :
+    HAPROXY_PROXY_ADDR      The first bind address if available (or empty if not
+                            applicable, for example in a "backend" section).
+
+    HAPROXY_PROXY_ID        The backend id.
+
+    HAPROXY_PROXY_NAME      The backend name.
+
+    HAPROXY_PROXY_PORT      The first bind port if available (or empty if not
+                            applicable, for example in a "backend" section or
+                            for a UNIX socket).
+
+    HAPROXY_SERVER_ADDR     The server address.
+
+    HAPROXY_SERVER_CURCONN  The current number of connections on the server.
+
+    HAPROXY_SERVER_ID       The server id.
+
+    HAPROXY_SERVER_MAXCONN  The server max connections.
+
+    HAPROXY_SERVER_NAME     The server name.
+
+    HAPROXY_SERVER_PORT     The server port if available (or empty for a UNIX
+                            socket).
+
+    HAPROXY_SERVER_SSL      "0" when SSL is not used, "1" when it is used
+
+    HAPROXY_SERVER_PROTO    The protocol used by this server, which can be one
+                            of "cli" (the haproxy CLI), "syslog" (syslog TCP
+                            server), "peers" (peers TCP server), "h1" (HTTP/1.x
+                            server), "h2" (HTTP/2 server), or "tcp" (any other
+                            TCP server).
+
+    PATH                    The PATH environment variable used when executing
+                            the command may be set using "external-check path".
+
+  If the command executed and exits with a zero status then the check is
+  considered to have passed, otherwise the check is considered to have
+  failed.
+
+  Example :
+        external-check command /bin/true
+
+  See also : "external-check", "option external-check", "external-check path"
+
+
+external-check path <path>
+  The value of the PATH environment variable used when running an external-check
+
+  May be used in the following contexts: tcp, http, log
+
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+
+  Arguments :
+    <path> is the path used when executing external command to run
+
+  The default path is "".
+
+  Example :
+        external-check path "/usr/bin:/bin"
+
+  See also : "external-check", "option external-check",
+             "external-check command"
+
+
 force-be-switch { if | unless } <condition>
   Allow content switching to select a backend instance even if it is disabled
   or unpublished. This rule can be used by admins to test traffic to services
@@ -7677,8 +7892,41 @@ filter <name> [param*]
 
         server srv1 192.168.0.1:80
 
-  See also : section 9.
+  See also : section 9., "filter-sequence"
 
+filter-sequence { request | response } <filter_list>
+
+  Specifies in which order filters declared on the proxy should be
+  executed.
+
+  May be used in the following contexts: tcp, http
+
+  May be used in sections:    defaults | frontend | listen | backend
+                                 no    |    yes   |   yes  |   yes
+
+  Comma-separated list of filter names (<filter_list>) to specify in which
+  order filters declared on the proxy should be executed, for request
+  or response path, respectively.
+
+  When filter-sequence is not specified for a given path (ie: request vs
+  response), the order in which filters are declared on the proxy is used.
+
+  If filter-sequence omits some filters that were declared on the proxy,
+  they will not be executed. This is an effective way of temporarily
+  disabling a filter without removing it from the configuration.
+
+  Example:
+     global
+        lua-load my-filter.lua # defines custom "lua.my-filter"
+     frontend myfront
+        filter comp-req
+        filter comp-res
+        filter lua.my-filter
+
+        filter-sequence request lua.my-filter,comp-req
+        filter-sequence response lua.my-filter,comp-res
+
+  See also : "filter"
 
 fullconn <conns>
   Specify at what backend load the servers will reach their maxconn
@@ -8135,6 +8383,11 @@ http-check expect [min-recv <int>] [comment <msg>]
                        occurred during the expect rule evaluation. <fmt> is a
                        Custom log format string (see section 8.2.6).
 
+    status-code <expr> is optional and can be used to set the check status code
+                       reported in logs, on success or on error. <expr> is a
+                       standard HAProxy expression formed by a sample-fetch
+                       followed by some converters.
+
     <match>   is a keyword indicating how to look for a specific pattern in the
               response. The keyword may be one of "status", "rstatus", "hdr",
               "fhdr", "string", or "rstring". The keyword may be preceded by an
@@ -8244,7 +8497,7 @@ http-check expect [min-recv <int>] [comment <msg>]
          http-check expect status 200,201,300-310
 
          # be sure a sessid coookie is set
-         http-check expect header name "set-cookie" value -m beg "sessid="
+         http-check expect hdr name "set-cookie" value -m beg "sessid="
 
          # consider SQL errors as errors
          http-check expect ! string SQL\ Error
@@ -9182,7 +9435,7 @@ log-steps <steps>
   same transaction. Special value 'all' may be used to enable all available
   log origins, making it possible to track a transaction from accept to close.
   Indidivual log origins may also be specified using their names separated by
-  spaces to selectively enable when logs should be produced.
+  commas to selectively enable when logs should be produced.
 
   Common log origins are: accept, connect, request, response, close.
 
@@ -9851,6 +10104,24 @@ no option dontlognull
 
   See also : "log", "http-ignore-probes", "monitor-uri", and
              section 8 about logging.
+
+
+option external-check
+  Use external processes for server health checks
+
+  May be used in the following contexts: tcp, http, log
+
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    no    |   yes  |   yes
+
+  It is possible to test the health of a server using an external command.
+  This is achieved by running the executable set using "external-check
+  command".
+
+  Requires the "external-check" global to be set.
+
+  See also : "external-check", "external-check command", "external-check path"
+
 
 option forwarded [ proto ]
                  [ host | host-expr <host_expr> ]
@@ -10642,6 +10913,39 @@ option httpslog
   See also :  section 8 about logging.
 
 
+option idle-close-on-response
+no option idle-close-on-response
+  Avoid closing idle frontend connections if a soft stop is in progress
+
+  May be used in the following contexts: http
+
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    yes   |   yes  |   no
+
+  Arguments : none
+
+  By default, idle connections will be closed during a soft stop. In some
+  environments, a client talking to the proxy may have prepared some idle
+  connections in order to send requests later. If there is no proper retry on
+  write errors, this can result in errors while haproxy is reloading. Even
+  though a proper implementation should retry on connection/write errors, this
+  option was introduced to support backwards compatibility with haproxy prior
+  to version 2.4. Indeed before v2.4, haproxy used to wait for a last request
+  and response to add a "connection: close" header before closing, thus
+  notifying the client that the connection would not be reusable.
+
+  In a real life example, this behavior was seen in AWS using the ALB in front
+  of a haproxy. The end result was ALB sending 502 during haproxy reloads.
+
+  Users are warned that using this option may increase the number of old
+  processes if connections remain idle for too long. Adjusting the client
+  timeouts and/or the "hard-stop-after" parameter accordingly might be
+  needed in case of frequent reloads.
+
+  See also: "timeout client", "timeout client-fin", "timeout http-request",
+            "hard-stop-after"
+
+
 option independent-streams
 no option independent-streams
   Enable or disable independent timeout processing for both directions
@@ -10704,56 +11008,6 @@ option ldap-check
         option ldap-check
 
   See also : "option httpchk"
-
-
-option external-check
-  Use external processes for server health checks
-
-  May be used in the following contexts: tcp, http, log
-
-  May be used in sections :   defaults | frontend | listen | backend
-                                 yes   |    no    |   yes  |   yes
-
-  It is possible to test the health of a server using an external command.
-  This is achieved by running the executable set using "external-check
-  command".
-
-  Requires the "external-check" global to be set.
-
-  See also : "external-check", "external-check command", "external-check path"
-
-
-option idle-close-on-response
-no option idle-close-on-response
-  Avoid closing idle frontend connections if a soft stop is in progress
-
-  May be used in the following contexts: http
-
-  May be used in sections :   defaults | frontend | listen | backend
-                                 yes   |    yes   |   yes  |   no
-
-  Arguments : none
-
-  By default, idle connections will be closed during a soft stop. In some
-  environments, a client talking to the proxy may have prepared some idle
-  connections in order to send requests later. If there is no proper retry on
-  write errors, this can result in errors while haproxy is reloading. Even
-  though a proper implementation should retry on connection/write errors, this
-  option was introduced to support backwards compatibility with haproxy prior
-  to version 2.4. Indeed before v2.4, haproxy used to wait for a last request
-  and response to add a "connection: close" header before closing, thus
-  notifying the client that the connection would not be reusable.
-
-  In a real life example, this behavior was seen in AWS using the ALB in front
-  of a haproxy. The end result was ALB sending 502 during haproxy reloads.
-
-  Users are warned that using this option may increase the number of old
-  processes if connections remain idle for too long. Adjusting the client
-  timeouts and/or the "hard-stop-after" parameter accordingly might be
-  needed in case of frequent reloads.
-
-  See also: "timeout client", "timeout client-fin", "timeout http-request",
-            "hard-stop-after"
 
 
 option log-health-checks
@@ -11717,95 +11971,35 @@ no option transparent     (deprecated)
             "transparent" option of the "bind" keyword.
 
 
-external-check command <command>
-  Executable to run when performing an external-check
+option use-small-buffers [ queue | l7-retries | check ]*
 
-  May be used in the following contexts: tcp, http, log
+  Enable support for small buffers for the given categories.
 
-  May be used in sections :   defaults | frontend | listen | backend
-                                 yes   |    no    |   yes  |   yes
-
-  Arguments :
-    <command> is the external command to run
-
-  The arguments passed to the to the command are:
-
-  <proxy_address> <proxy_port> <server_address> <server_port>
-
-  The <proxy_address> and <proxy_port> are derived from the first listener
-  that is either IPv4, IPv6 or a UNIX socket. In the case of a UNIX socket
-  listener the proxy_address will be the path of the socket and the
-  <proxy_port> will be the string "NOT_USED". In a backend section, it's not
-  possible to determine a listener, and both <proxy_address> and <proxy_port>
-  will have the string value "NOT_USED".
-
-  Some values are also provided through environment variables.
-
-  Environment variables :
-    HAPROXY_PROXY_ADDR      The first bind address if available (or empty if not
-                            applicable, for example in a "backend" section).
-
-    HAPROXY_PROXY_ID        The backend id.
-
-    HAPROXY_PROXY_NAME      The backend name.
-
-    HAPROXY_PROXY_PORT      The first bind port if available (or empty if not
-                            applicable, for example in a "backend" section or
-                            for a UNIX socket).
-
-    HAPROXY_SERVER_ADDR     The server address.
-
-    HAPROXY_SERVER_CURCONN  The current number of connections on the server.
-
-    HAPROXY_SERVER_ID       The server id.
-
-    HAPROXY_SERVER_MAXCONN  The server max connections.
-
-    HAPROXY_SERVER_NAME     The server name.
-
-    HAPROXY_SERVER_PORT     The server port if available (or empty for a UNIX
-                            socket).
-
-    HAPROXY_SERVER_SSL      "0" when SSL is not used, "1" when it is used
-
-    HAPROXY_SERVER_PROTO    The protocol used by this server, which can be one
-                            of "cli" (the haproxy CLI), "syslog" (syslog TCP
-                            server), "peers" (peers TCP server), "h1" (HTTP/1.x
-                            server), "h2" (HTTP/2 server), or "tcp" (any other
-                            TCP server).
-
-    PATH                    The PATH environment variable used when executing
-                            the command may be set using "external-check path".
-
-  If the command executed and exits with a zero status then the check is
-  considered to have passed, otherwise the check is considered to have
-  failed.
-
-  Example :
-        external-check command /bin/true
-
-  See also : "external-check", "option external-check", "external-check path"
-
-
-external-check path <path>
-  The value of the PATH environment variable used when running an external-check
-
-  May be used in the following contexts: tcp, http, log
+  May be used in the following contexts: tcp, http
 
   May be used in sections :   defaults | frontend | listen | backend
                                  yes   |    no    |   yes  |   yes
 
-  Arguments :
-    <path> is the path used when executing external command to run
+  This option can be used to enable the small buffers support at different places
+  to save memory. By default, with no parameter, small buffers are used as far
+  as possible at all possible places. Otherwise, it is possible to limit it to
+  following the places:
 
-  The default path is "".
+   - queue:      When set, small buffers will be used to store the requests, if
+                 small enough, when the connection is queued.
+   - l7-retries: When set, small buffers will be used to save the requests
+                 when L7 retries are enabled.
+   - check:      When set, small buffers will be used for the health-checks
+                 requests.
 
-  Example :
-        external-check path "/usr/bin:/bin"
+  When enabled, small buffers are used, but only if it is possible. Otherwise,
+  when data are too large, a regular buffer is automatically used. The size of
+  small buffers is configurable via the "tune.bufsize.small" global setting.
 
-  See also : "external-check", "option external-check",
-             "external-check command"
+  If this option has been enabled in a "defaults" section, it can be disabled
+  in a specific instance by prepending the "no" keyword before it.
 
+  See also: tune.bufsize.small
 
 persist rdp-cookie
 persist rdp-cookie(<name>)
@@ -12226,6 +12420,14 @@ server <name> <address>[:[port]] [param*]
                       one of them over the FD. The bind part will use the
                       received socket as the client FD. Should be used
                       carefully.
+                    - 'quic4@' [ EXPERIMENTAL] -> address is resolved as IPv4
+                      and protocol UDP is used. QUIC on the backend side is
+                      considered experimental mainly because this prevents the
+                      server removal at runtime. This requires the global
+                      keyword "expose-experimental-directives" to use it.
+                    - 'quic6@' [ EXPERIMENTAL] -> address is resolved as IPv6
+                      and protocol UDP is used. It is considered similarly
+                      flagged as experimental.
                     - 'rhttp@' [ EXPERIMENTAL ] -> custom address family for a
                       passive server in HTTP reverse context. This is an
                       experimental features which requires
@@ -12765,12 +12967,12 @@ stats hide-version
 
   Arguments : none
 
-  By default, the stats page reports some useful status information along with
+  The stats page can report some useful status information along with
   the statistics. Among them is HAProxy's version. However, it is generally
   considered dangerous to report precise version to anyone, as it can help them
   target known weaknesses with specific attacks. The "stats hide-version"
   statement removes the version from the statistics report. This is recommended
-  for public sites or any site with a weak login/password.
+  for public sites or any site with a weak login/password, and is the default.
 
   Though this statement alone is enough to enable statistics reporting, it is
   recommended to set all other settings in order to avoid relying on default
@@ -12794,7 +12996,8 @@ stats hide-version
         stats uri     /admin?stats
         stats refresh 5s
 
-  See also : "stats auth", "stats enable", "stats realm", "stats uri"
+  See also : "stats auth", "stats enable", "stats realm", "stats uri",
+             "stats show-version"
 
 
 stats http-request { allow | deny | auth [realm <realm>] }
@@ -13060,6 +13263,25 @@ stats show-node [ <name> ]
   See also: "show-desc", "stats enable", "stats uri", and "node" in global
             section.
 
+stats show-version
+  Enable statistics and show HAProxy version reporting
+
+  May be used in the following contexts: http
+
+  May be used in sections :   defaults | frontend | listen | backend
+                                 yes   |    yes   |   yes  |   yes
+
+  Arguments : none
+
+  The stats page can report some useful status information along with
+  the statistics. Among them is HAProxy's version. However, it is generally
+  considered dangerous to report precise version to anyone, as it can help them
+  target known weaknesses with specific attacks, and so is disabled by default.
+  The "stats show-version" enables displaying those informations. This is not
+  recommanded for public sites or any site with a weak login/password.
+
+  See also : "stats auth", "stats enable", "stats realm", "stats uri",
+             "stats hide-version"
 
 stats uri <prefix>
   Enable statistics and define the URI prefix to access them
@@ -13564,13 +13786,6 @@ tcp-check expect [min-recv <int>] [comment <msg>]
               does not match, the check will wait for more data. If set to 0,
               the evaluation result is always conclusive.
 
-    <match>   is a keyword indicating how to look for a specific pattern in the
-              response. The keyword may be one of "string", "rstring", "binary" or
-              "rbinary".
-              The keyword may be preceded by an exclamation mark ("!") to negate
-              the match. Spaces are allowed between the exclamation mark and the
-              keyword. See below for more details on the supported keywords.
-
     ok-status <st>     is optional and can be used to set the check status if
                        the expect rule is successfully evaluated and if it is
                        the last rule in the tcp-check ruleset. "L7OK", "L7OKC",
@@ -13617,6 +13832,13 @@ tcp-check expect [min-recv <int>] [comment <msg>]
                        reported in logs, on success or on error. <expr> is a
                        standard HAProxy expression formed by a sample-fetch
                        followed by some converters.
+
+    <match>   is a keyword indicating how to look for a specific pattern in the
+              response. The keyword may be one of "string", "rstring", "binary" or
+              "rbinary".
+              The keyword may be preceded by an exclamation mark ("!") to negate
+              the match. Spaces are allowed between the exclamation mark and the
+              keyword. See below for more details on the supported keywords.
 
     <pattern> is the pattern to look for. It may be a string or a regular
               expression. If the pattern contains spaces, they must be escaped
@@ -14998,6 +15220,7 @@ The same abbreviations are used in the reference section 4.4 below.
 accept                         X           X     X     X     X            -   -   -
 add-acl                        -           -     -     -     -            X   X   -
 add-header                     -           -     -     -     -            X   X   X
+add-headers-bin                -           -     -     -     -            X   X   X
 allow                          -           -     -     -     -            X   X   X
 attach-srv                     -           -     X     -     -            -   -   -
 auth                           -           -     -     -     -            X   -   -
@@ -15007,6 +15230,7 @@ capture                        -           -     -     X     -            X   X 
 close                          -           -     -     -     X            -   -   -
 del-acl                        -           -     -     -     -            X   X   -
 del-header                     -           -     -     -     -            X   X   X
+del-headers-bin                -           -     -     -     -            X   X   X
 del-map                        -           -     -     -     -            X   X   X
 deny                           -           -     -     -     -            X   X   -
 dgram-drop                     X           -     -     -     -            -   -   -
@@ -15043,6 +15267,7 @@ set-dst-port                   -           X     X     X     -            X   - 
 set-fc-mark                    -           X     X     X     X            X   X   -
 set-fc-tos                     -           X     X     X     X            X   X   -
 set-header                     -           -     -     -     -            X   X   X
+set-headers-bin                -           -     -     -     -            X   X   X
 set-log-level                  -           -     -     X     X            X   X   X
 set-map                        -           -     -     -     -            X   X   X
 set-mark (deprecated)          -           X     X     X     X            X   X   -
@@ -15121,6 +15346,30 @@ add-header <name> <fmt>
   so it is possible to add other similar rules. Note that header addition is
   performed immediately, so one rule might reuse the resulting header from a
   previous rule.
+
+
+add-headers-bin <expr> [ prefix <str> ]
+  Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
+                    - |          -  |   -  |   -  |   -  |          X |  X |  X
+
+  This is a variant of the "add-header" action where the header names and
+  values are passed as a varint encoded binary string. See the "req.hdrs_bin"
+  sample fetch about the varint format. This is useful when you want to set
+  multiple headers at once, without having to know the header names in
+  advance. Note that these headers have not been validated by the HTTP parser
+  and could lead to emitting invalid messages and in worst cases lead to
+  request smuggling attacks. The number of headers inserted are also of
+  importance, as that is limited by tune.http.maxhdr.  Optional prefix will
+  only set the headers from the encoded string that start with <str>.
+
+  Example:
+
+    # This would reset the Accept/UA/Host headers to their initial values
+    http-request set-var(txn.oldheaders) req.hdrs_bin
+    http-request del-header Accept
+    http-request del-header User-Agent
+    http-request del-header Host
+    http-request add-headers-bin var(txn.oldheaders)
 
 
 allow
@@ -15265,6 +15514,20 @@ del-header <name> [ -m <meth> ]
   method is used.
 
 
+del-headers-bin <expr> [ -m <meth> ]
+  Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
+                    - |          -  |   -  |   -  |   -  |          X |  X |  X
+
+  This removes all HTTP header fields whose names are specified in <expr>.
+  <expr> must return a varint encoded binary string of all header names that
+  should be deleted. See "add-headers-bin" and "set-headers-bin" for the
+  description of encoding and examples. <meth> is the matching method, applied
+  on all the header names. Supported matching methods are "str" (exact match),
+  "beg" (prefix match), "end" (suffix match) and "sub" (substring match). The
+  "reg" (regex match) is not supported due to unpredictable performance during
+  runtime. If not specified, exact matching method is used.
+
+
 del-map(<map-name>) <key fmt>
   Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
                     - |          -  |   -  |   -  |   -  |          X |  X |  X
@@ -15314,15 +15577,14 @@ disable-l7-retry
   reason than a connection failure. This can be useful for example to make
   sure POST requests aren't retried on failure.
 
-do-log
+do-log [profile <log_profile>]
   Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
                     X |          X  |   X  |   X  |   X  |          X |  X |  X
 
   This action manually triggers a log emission on the proxy. This means
   log options on the proxy will be considered (including formatting options
   such as "log-format"), but it will not interfere with the logs automatically
-  generated by the proxy during transaction handling. It currently doesn't
-  support any argument, though extensions may appear in future versions.
+  generated by the proxy during transaction handling.
 
   Using "log-profile", it is possible to precisely describe how the log should
   be emitted for each of the available contexts where the action may be used.
@@ -15332,15 +15594,28 @@ do-log
 
   Also, they will be properly reported when using "%OG" logformat alias.
 
+  Optional "profile" argument may be used to specify the name of a log-profile
+  section that should be used for this do-log action specifically instead of
+  the one associated to the current logger that applies by default.
+
   Example:
-    log-profile myprof
+    log-profile my-dft-prof
       on tcp-req-conn format "Connect: %ci"
 
+    log-profile my-local-prof
+      on tcp-req-conn format "Local Connect: %ci"
+
     frontend myfront
-      log stdout format rfc5424 profile myprof local0
+      log stdout format rfc5424 profile my-dft-prof local0
       log-format "log generated using proxy logformat, from '%OG'"
-      tcp-request connection do-log             #uses special log-profile format
-      tcp-request content do-log                #uses proxy logformat
+      acl local src 127.0.0.1
+      # on connection use either log-profile from the logger (my-dft-prof) or
+      # explicit my-local-prof if source ip is localhost
+      tcp-request connection do-log if !local
+      tcp-request connection do-log profile my-local-prof if local
+      # on content use proxy logformat, since no override was specified
+      # in my-dft-prof
+      tcp-request content do-log
 
 do-resolve(<var>,<resolvers>[,ipv4|ipv6]) <expr>
   Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
@@ -16152,6 +16427,29 @@ set-header <name> <fmt>
         http-request set-header X-SSL-Issuer           %{+Q}[ssl_c_i_dn]
         http-request set-header X-SSL-Client-NotBefore %{+Q}[ssl_c_notbefore]
         http-request set-header X-SSL-Client-NotAfter  %{+Q}[ssl_c_notafter]
+
+set-headers-bin <expr> [ prefix <str> ]
+  Usable in:  QUIC Ini|    TCP RqCon| RqSes| RqCnt| RsCnt|    HTTP Req| Res| Aft
+                    - |          -  |   -  |   -  |   -  |          X |  X |  X
+
+  This is a variant of the "set-header" action where the header names and
+  values are passed as a varint encoded binary string. See the "req.hdrs_bin"
+  sample fetch about the varint format. This is useful when you want to set
+  multiple headers at once, without having to know the header names in
+  advance. Note that these headers have not been validated by the HTTP parser
+  and could lead to emitting invalid messages and in worst cases lead to
+  request smuggling attacks. The number of headers inserted are also of
+  importance, as that is limited by tune.http.maxhdr.  Optional prefix will
+  only set the headers from the encoded string that start with <str>.
+
+  Example:
+
+    # This would reset the Accept/UA/Host headers to their initial values
+    http-request set-var(txn.oldheaders) req.hdrs_bin
+    http-request del-header Accept
+    http-request del-header User-Agent
+    http-request del-header Host
+    http-request set-headers-bin var(txn.oldheaders)
 
 
 set-log-level <level>
@@ -17481,6 +17779,7 @@ proto <name>
   a bind line :
 
    quic : mode=HTTP  side=FE|BE  mux=QUIC  flags=HTX|NO_UPG|FRAMED
+    qmux : mode=HTTP  side=FE|BE  mux=QMUX  flags=HTX|NO_UPG
     h2   : mode=HTTP  side=FE|BE  mux=H2    flags=HTX|HOL_RISK|NO_UPG
     h1   : mode=HTTP  side=FE|BE  mux=H1    flags=HTX|NO_UPG
     none : mode=TCP   side=FE|BE  mux=PASS  flags=NO_UPG
@@ -17493,6 +17792,10 @@ proto <name>
   If the ALPN or the NPN settings are configured, the specified protocols
   should be compatible with the multiplexer's protocol to avoid any issue. For
   instance, if "proto h1" is set, the ALPN should not be set to "h2".
+
+  QMux is a subset of QUIC which runs over TCP. It corresponds to the following
+  draft protocol https://www.ietf.org/archive/id/draft-opik-quic-qmux-01.html.
+  It is considered experimental in haproxy for now.
 
 quic-cc-algo { cubic | newreno | bbr | nocc }[(<args,...>)]
   This is a QUIC specific setting to select the congestion control algorithm
@@ -18409,6 +18712,18 @@ hash-key <key>
   uses "hash-type consistent", and the quality of the distribution will depend
   on the quality of the keys.
 
+healthcheck <name>
+  May be used in the following contexts: tcp, http
+
+  Specify the health-check section to use to perform check on the server.
+
+  Argument :
+    <name>    is the health-check section name.
+
+  Thanks to this option, it is possible to use a pre-server health-check
+  configuration instead of using the proxy configuration. See also "healthcheck
+  section".
+
 id <value>
   May be used in the following contexts: tcp, http, log
 
@@ -19041,6 +19356,8 @@ proto <name>
   Here are the protocols that may be used as argument to a "proto" directive on
   a server line :
 
+    quic : mode=HTTP  side=FE|BE  mux=QUIC  flags=HTX|NO_UPG|FRAMED
+    qmux : mode=HTTP  side=FE|BE  mux=QMUX  flags=HTX|NO_UPG
     h2   : mode=HTTP  side=FE|BE  mux=H2    flags=HTX|HOL_RISK|NO_UPG
     fcgi : mode=HTTP  side=BE     mux=FCGI  flags=HTX|HOL_RISK|NO_UPG
     h1   : mode=HTTP  side=FE|BE  mux=H1    flags=HTX|NO_UPG
@@ -19055,6 +19372,10 @@ proto <name>
   instance, if "proto h1" is set, the ALPN should not be set to "h2".
 
   See also "ws" to use an alternative protocol for websocket streams.
+
+  QMux is a subset of QUIC which runs over TCP. It corresponds to the following
+  draft protocol https://www.ietf.org/archive/id/draft-opik-quic-qmux-01.html.
+  It is considered experimental in haproxy for now.
 
 quic-cc-algo { cubic | newreno | bbr | nocc }[(<args,...>)]
   This is a QUIC specific setting to select the congestion control algorithm
@@ -21478,13 +21799,14 @@ jwt_decrypt_cert(<cert>)
   decrypted thanks to the certificate provided.
   The <cert> parameter must be a path to an already loaded certificate (that
   can be dumped via the "dump ssl cert" CLI command). The certificate must have
-  its "jwt" option explicitely set to "on" (see "jwt" crt-list option). It can
+  its "jwt" option explicitly set to "on" (see "jwt" crt-list option). It can
   be provided directly or via a variable.
   The only tokens managed yet are the ones using the Compact Serialization
   format (five dot-separated base64-url encoded strings).
 
   This converter can be used for tokens that have an algorithm ("alg" field of
-  the JOSE header) among the following: RSA1_5, RSA-OAEP or RSA-OAEP-256.
+  the JOSE header) among the following: RSA1_5, RSA-OAEP, RSA-OAEP-256,
+  ECDH-ES, ECDH-ES+A128KW, ECDH-ES+A192KW or ECDH-ES+A256KW.
 
   The JWE token must be provided base64url-encoded and the output will be
   provided "raw". If an error happens during token parsing, signature
@@ -21500,8 +21822,9 @@ jwt_decrypt_jwk(<jwk>)
   Performs a signature validation of a JSON Web Token following the JSON Web
   Encryption format (see RFC 7516) given in input and return its content
   decrypted thanks to the provided JSON Web Key (RFC7517).
-  The <jwk> parameter must be a valid JWK of type 'oct' or 'RSA' ('kty' field
-  of the JSON key) that can be provided either as a string or via a variable.
+  The <jwk> parameter must be a valid JWK of type 'oct', 'EC' or 'RSA' ('kty'
+  field of the JSON key) that can be provided either as a string or via a
+  variable.
 
   The only tokens managed yet are the ones using the Compact Serialization
   format (five dot-separated base64-url encoded strings).
@@ -21509,11 +21832,16 @@ jwt_decrypt_jwk(<jwk>)
   This converter can be used to decode token that have a symmetric-type
   algorithm ("alg" field of the JOSE header) among the following: A128KW,
   A192KW, A256KW, A128GCMKW, A192GCMKW, A256GCMKW, dir. In this case, we expect
-  the provided JWK to be of the 'oct' type. Please note that the A128KW and
-  A192KW algorithms are not available on AWS-LC and decryption will not work.
-  This converter also manages tokens  that have an algorithm ("alg" field of
-  the JOSE header) among the following: RSA1_5, RSA-OAEP or RSA-OAEP-256. In
-  such a case an 'RSA' type JWK representing a private key must be provided.
+  the provided JWK to be of the 'oct' type.
+
+  This converter also manages tokens that have an algorithm ("alg" field of the
+  JOSE header) in the RSA family (RSA1_5, RSA-OAEP or RSA-OAEP-256) when
+  provided an 'RSA' JWK, or in the ECDH family (ECDH-ES, ECDH-ES+A128KW,
+  ECDH-ES+A192KW or ECDH-ES+A256KW) when provided an 'EC' JWK.
+
+  Please note that the A128KW and A192KW algorithms are not available on AWS-LC
+  so the A128KW, A192KW, ECDH-ES+A128KW and ECDH-ES+A192KW algorithms won't
+  work.
 
   The JWE token must be provided base64url-encoded and the output will be
   provided "raw". If an error happens during token parsing, signature
@@ -21527,7 +21855,7 @@ jwt_decrypt_jwk(<jwk>)
      # Get a JWT from the authorization header, put its decrypted content in an
      # HTTP header
      http-request set-var(txn.bearer) http_auth_bearer
-     http-request set-header X-Decrypted %[var(txn.bearer),jwt_decrypt_secret(\'{\"kty\":\"oct\",\"k\":\"wAsgsg\"}\')
+     http-request set-header X-Decrypted %[var(txn.bearer),jwt_decrypt_jwk(\'{\"kty\":\"oct\",\"k\":\"wAsgsg\"}\')
 
     # or via a variable
      http-request set-var(txn.bearer) http_auth_bearer
@@ -25365,6 +25693,7 @@ ssl_fc_client_early_traffic_secret                 string
 ssl_fc_client_handshake_traffic_secret             string
 ssl_fc_client_random                               binary
 ssl_fc_client_traffic_secret_0                     string
+ssl_fc_crtname                                     string
 ssl_fc_curve                                       string
 ssl_fc_early_exporter_secret                       string
 ssl_fc_ecformats_bin                               binary
@@ -25988,6 +26317,21 @@ ssl_fc_client_traffic_secret_0 : string
   keylog callback to generate the SSLKEYLOGFILE. The SSL Key logging must be
   activated with "tune.ssl.keylog on" in the global section. See also
   "tune.ssl.keylog"
+
+ssl_fc_crtname : string
+  Returns the name of the certificate that was selected for the incoming
+  SSL/TLS connection. This is the name as it appears in "show ssl cert": it
+  may be the filename with its relative or absolute path, or an alias,
+  depending on how the certificate was declared in the configuration.
+
+  Example :
+    crt-store example
+        load crt "example.com.pem"
+
+    frontend www
+        bind *:443 ssl crt "@example/example.com.pem"
+        acl match_certificate ssl_fc_crtname -m beg -i "@example/"
+        http-request set-header X-Cert-Name %[ssl_fc_crtname] if match_certificate
 
 ssl_fc_curve : string
   Returns the name of the curve used in the key agreement when the incoming
@@ -26897,9 +27241,10 @@ capture.req.uri : string
   allocated.
 
 capture.req.ver : string
-  This extracts the request's HTTP version and returns either "HTTP/1.0" or
-  "HTTP/1.1". Unlike "req.ver", it can be used in both request, response, and
-  logs because it relies on a persistent flag.
+  This extracts the request's HTTP version and returns it with the format
+  "HTTP/<major>.<minor>". It can be used in both request, response, and logs
+  because it relies on a persistent information. If the request version is not
+  valid, this sample fetch fails.
 
 capture.res.hdr(<idx>) : string
   This extracts the content of the header captured by the "capture response
@@ -26908,9 +27253,10 @@ capture.res.hdr(<idx>) : string
   See also: "capture response header"
 
 capture.res.ver : string
-  This extracts the response's HTTP version and returns either "HTTP/1.0" or
-  "HTTP/1.1". Unlike "res.ver", it can be used in logs because it relies on a
-  persistent flag.
+  This extracts the response's HTTP version and returns it with the format
+  "HTTP/<major>.<minor>". It can be used in logs because it relies on a
+  persistent information. If the response version is not valid, this sample
+  fetch fails.
 
 cookie([<name>]) : string (deprecated)
   This extracts the last occurrence of the cookie name <name> on a "Cookie"
@@ -27261,15 +27607,13 @@ req.timer.tq : integer
 
 req.ver : string
 req_ver : string (deprecated)
-  Returns the version string from the HTTP request, for example "1.1". This can
-  be useful for ACL. For logs use the "%HV" logformat alias. Some predefined
-  ACL already check for versions 1.0 and 1.1.
+  Returns the version string from the HTTP request, with the format
+  "<major>.<minor>". This can be useful for ACL. Some predefined ACL already
+  check for common versions.  It can be used in both request, response, and
+  logs because it relies on a persistent information. If the request version is
+  not valid, this sample fetch fails.
 
   Common values are "1.0", "1.1", "2.0" or "3.0".
-
-  In the case of http/2 and http/3, the value is not extracted from the HTTP
-  version in the request line but is determined by the negotiated protocol
-  version.
 
   ACL derivatives :
     req.ver : exact string match
@@ -27474,8 +27818,9 @@ res.timer.hdr : integer
 
 res.ver : string
 resp_ver : string (deprecated)
-  Returns the version string from the HTTP response, for example "1.1". This
-  can be useful for logs, but is mostly there for ACL.
+  Returns the version string from the HTTP response, with the format
+  "<major>.<minor>". This can be useful for logs, but is mostly there for
+  ACL. If the response version is not valid, this sample fetch fails.
 
   It may be used in tcp-check based expect rules.
 
@@ -28037,7 +28382,7 @@ Detailed fields description :
     limits have been reached. For instance, if actconn is close to 512 when
     multiple connection errors occur, chances are high that the system limits
     the process to use a maximum of 1024 file descriptors and that all of them
-    are used. See section 3 "Global parameters" to find how to tune the system.
+    are used. See section 3 "Global section" to find how to tune the system.
 
   - "feconn" is the total number of concurrent connections on the frontend when
     the session was logged. It is useful to estimate the amount of resource
@@ -28277,7 +28622,7 @@ Detailed fields description :
     limits have been reached. For instance, if actconn is close to 512 or 1024
     when multiple connection errors occur, chances are high that the system
     limits the process to use a maximum of 1024 file descriptors and that all
-    of them are used. See section 3 "Global parameters" to find how to tune the
+    of them are used. See section 3 "Global section" to find how to tune the
     system.
 
   - "feconn" is the total number of concurrent connections on the frontend when
@@ -28735,7 +29080,7 @@ Please refer to the table below for currently defined aliases :
   |                          Others                                           |
   +---+------+------------------------------------------------------+---------+
   |   | %B   | bytes_read           (from server to client)         | numeric |
-  |   |      | %[req.bytes_in]                                      |         |
+  |   |      | %[res.bytes_in]                                      |         |
   +---+------+------------------------------------------------------+---------+
   | H | %CC  | captured_request_cookie                              | string  |
   +---+------+------------------------------------------------------+---------+
@@ -29888,7 +30233,21 @@ a server by adding some latencies in the processing.
 9.2. HTTP compression
 ---------------------
 
-filter compression
+filter comp-req
+
+Enables filter that explicitly tries to compress HTTP requests according to
+"compression" settings. Implicitly sets "compression direction request".
+
+filter comp-res
+
+Enables filter that explicitly tries to compress HTTP responses according to
+"compression" settings. Implicitly sets "compression direction response"
+
+filter compression (deprecated)
+
+Alias for backward compatibility purposes that is functionally equivalent to
+enabling both "comp-req" and "comp-res" filter. "compression" keyword must be
+used to configure appropriate behavior:
 
 The HTTP compression has been moved in a filter in HAProxy 1.7. "compression"
 keyword must still be used to enable and configure the HTTP compression. And
@@ -31269,9 +31628,9 @@ user <username> [password|insecure-password <password>]
   slower than their glibc counterparts when calculating hashes, so you might
   want to consider this aspect too.
 
-  All passwords are considered normal arguments and are therefor subject to
+  All passwords are considered normal arguments and are therefore subject to
   regular section 2.2 Quoting and escaping. Single quoting passwords is
-  therefor recommended.
+  therefore recommended.
 
   Example:
         userlist L1
@@ -31963,6 +32322,47 @@ challenge <string>
   Takes a challenge type as parameter, this must be http-01 or dns-01. When not
   used the default is http-01.
 
+challenge-ready <value>[,<value>]*
+  Configure the conditions that must be met before notifying the ACME server
+  that a dns-01 challenge is ready to be validated. Accepted values are:
+
+    cli  - wait for an operator to signal readiness via the CLI command
+           "acme challenge_ready <crt> domain <domain>" on the master CLI or
+           the stats socket. This allows an external DNS provisioning tool to
+           confirm that the TXT record has been set before HAProxy proceeds.
+
+    dns  - perform a DNS pre-check by resolving the TXT record for
+           "_acme-challenge.<domain>" using the configured "default" resolvers
+           section, not the authoritative name servers. The challenge is not
+           submitted until the TXT record matches the expected token. Results
+           may therefore be affected by DNS caching at the resolver level. The
+           delay between resolution attempts is controlled by "dns-delay". This
+           option is independent of the CLI command, so no human intervention
+           is required.
+
+    delay - apply an initial wait of "dns-delay" before proceeding. Without
+            "dns", the challenge is submitted after the delay expires. When
+            combined with "dns", the initial wait is applied before starting
+            the DNS pre-checks.
+
+    none - no readiness condition; the challenge is submitted to the ACME
+           server immediately without waiting for any external confirmation.
+           This option cannot be combined with others.
+
+  Multiple values can be combined with a comma. When several conditions are
+  specified, HAProxy processes them in the following order: first it waits for
+  the CLI confirmation ("cli"), then applies the initial delay ("delay"), then
+  performs the DNS pre-checks ("dns").
+
+  This option is only compatible with the dns-01 challenge type.
+
+  When "challenge" is set to "dns-01" and this option is not configured, the
+  default is "cli".
+
+  Example:
+    # Wait for CLI confirmation, then verify DNS propagation
+    challenge-ready cli,dns
+
 contact <string>
   The contact email that will be associated to the account key in the CA.
 
@@ -31975,6 +32375,40 @@ directory <string>
 
   Example:
     directory https://acme-staging-v02.api.letsencrypt.org/directory
+
+dns-delay <time>
+  Configure the delay used by "challenge-ready" conditions "delay" and "dns".
+  The value is a time expressed in HAProxy time format (e.g. "5m", "300s").
+  Default is 30 seconds.
+
+  Its role depends on the "challenge-ready" conditions in use:
+
+    delay     - the challenge is submitted after this delay expires, without
+                any DNS pre-check.
+
+    dns       - the delay between two consecutive DNS resolution attempts.
+                The first probe fires immediately without any initial wait.
+
+    dns+delay - the initial wait before the first DNS resolution attempt, and
+                the delay between subsequent retries.
+
+  Note that the resolution goes through the configured "default" resolvers
+  section, not the authoritative name servers. Results may therefore still be
+  affected by DNS caching at the resolver level.
+
+dns-timeout <time>
+  When "challenge-ready" includes "dns", configure the maximum time allowed to
+  successfully resolve the TXT record before aborting the challenge. The value
+  is a time expressed in HAProxy time format (e.g. "10m", "600s"). Default is
+  600 seconds.
+
+  The timer starts from the moment the first DNS resolution attempt is
+  triggered (after the initial "dns-delay"). If the next resolution attempt
+  would be triggered after the timeout has elapsed, the challenge is aborted
+  with an error. This prevents an infinite retry loop when DNS propagation
+  fails.
+
+  See also: "dns-delay"
 
 keytype <string>
   Configure the type of key that will be generated. Value can be either "RSA"
@@ -32031,6 +32465,81 @@ Example:
       curves P-384
       map virt@acme
 
+
+12.9. Healthchecks
+------------------
+
+It is possible to globally declare several health-checks that could be used by
+servers across all the configuration, overriding the local proxy configuration.
+
+healthcheck <name>
+  Created a new healthcheck with name <name>. This name must be unique. It
+  should be used on server line to reference a specific health-check section.
+
+type <type>
+  Defines the health-check type. This parameter is mandatory. Following types
+  of health-check are supported:
+
+    * tcp-check
+    * httpchk
+    * ssl-hello-chk
+    * smtpchk
+    * pgsql-check
+    * redis-check
+    * mysql-check
+    * ldap-check
+    * spop-check
+
+  Each type uses the same parameters, if any, than the corresponding proxy's
+  option. For instance, the method, the uri... may be speficied for the
+  "httpchk" type:
+
+  Examples :
+        healthcheck my-http-check
+	    type httpchk GET /health HTTP/1.1 %[srv_name]
+
+  See also : "option tcp-check", "option httpchk", "option ssl-hello-chk",
+             "option smtpchk", "option mysql-check", "option pgsql-check",
+	     "option redis-check", "option ldap-check and "option spop-check"
+
+http-check comment <string>
+http-check connect [default] [port <expr>] [addr <ip>] [send-proxy]
+                   [via-socks4] [ssl] [sni <sni>] [alpn <alpn>] [linger]
+                   [proto <name>] [comment <msg>]
+http-check disable-on-404
+http-check expect [min-recv <int>] [comment <msg>]
+                  [ok-status <st>] [error-status <st>] [tout-status <st>]
+                  [on-success <fmt>] [on-error <fmt>] [status-code <expr>]
+                  [!] <match> <pattern>
+http-check send [meth <method>] [{ uri <uri> | uri-lf <fmt> }>] [ver <version>]
+                [hdr <name> <fmt>]* [{ body <string> | body-lf <fmt> }]
+                [comment <msg>]
+http-check send-state
+http-check set-var(<var-name>[,<cond>...]) <expr>
+http-check set-var-fmt(<var-name>[,<cond>...]) <fmt>
+http-check unset-var(<var-name>)
+  Add a specific http-check rule for a "httpchk" healthcheck. The same syntax
+  than the corresponding proxy's directives is used. See the corresponding proxy
+  documentation for details.
+
+tcp-check comment <string>
+tcp-check connect [default] [port <expr>] [addr <ip>] [send-proxy] [via-socks4]
+                  [ssl] [sni <sni>] [alpn <alpn>] [linger]
+                  [proto <name>] [comment <msg>]
+tcp-check expect [min-recv <int>] [comment <msg>]
+                 [ok-status <st>] [error-status <st>] [tout-status <st>]
+                 [on-success <fmt>] [on-error <fmt>] [status-code <expr>]
+                 [!] <match> <pattern>
+tcp-check send <data> [comment <msg>]
+tcp-check send-lf <fmt> [comment <msg>]
+tcp-check send-binary <hexstring> [comment <msg>]
+tcp-check send-binary-lf <hexfmt> [comment <msg>]
+tcp-check set-var(<var-name>[,<cond>...]) <expr>
+tcp-check set-var-fmt(<var-name>[,<cond>...]) <fmt>
+tcp-check unset-var(<var-name>)
+  Add a specific tcp-check rule for a "tcp-check" healthcheck. The same syntax
+  than the corresponding proxy's directives is used. See the corresponding proxy
+  documentation for details.
 
 /*
  * Local variables:

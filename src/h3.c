@@ -41,7 +41,6 @@
 #include <haproxy/quic_fctl.h>
 #include <haproxy/quic_frame.h>
 #include <haproxy/quic_utils.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
 
@@ -642,7 +641,7 @@ static ssize_t h3_req_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	/* TODO support trailer parsing in this function */
 
 	/* TODO support buffer wrapping */
-	BUG_ON(b_head(buf) + len >= b_wrap(buf));
+	BUG_ON(b_head(buf) + len > b_wrap(buf));
 	ret = qpack_decode_fs((const unsigned char *)b_head(buf), len, tmp,
 	                    list, sizeof(list) / sizeof(list[0]));
 	if (ret < 0) {
@@ -1112,6 +1111,7 @@ static ssize_t h3_resp_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	struct buffer *tmp = get_trash_chunk();
 	struct htx *htx = NULL;
 	struct htx_sl *sl;
+	struct htx_blk *tailblk = NULL;
 	struct http_hdr list[global.tune.max_http_hdr * 2];
 	unsigned int flags = HTX_SL_F_NONE;
 	struct ist status = IST_NULL;
@@ -1142,7 +1142,7 @@ static ssize_t h3_resp_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	TRACE_ENTER(H3_EV_RX_FRAME|H3_EV_RX_HDR, qcs->qcc->conn, qcs);
 
 	/* TODO support buffer wrapping */
-	BUG_ON(b_head(buf) + len >= b_wrap(buf));
+	BUG_ON(b_head(buf) + len > b_wrap(buf));
 	ret = qpack_decode_fs((const unsigned char *)b_head(buf), len, tmp,
 	                    list, sizeof(list) / sizeof(list[0]));
 	if (ret < 0) {
@@ -1162,7 +1162,7 @@ static ssize_t h3_resp_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	}
 	BUG_ON(!b_size(appbuf)); /* TODO */
 	htx = htx_from_buf(appbuf);
-
+	tailblk = htx_get_tail_blk(htx);
 	/* Only handle one HEADERS frame at a time. Thus if HTX buffer is too
 	 * small, it happens solely from a single frame and the only option is
 	 * to close the stream.
@@ -1352,8 +1352,11 @@ static ssize_t h3_resp_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	}
 
  out:
-	if (appbuf)
+	if (appbuf) {
+		if ((ssize_t)len < 0)
+			htx_truncate_blk(htx, tailblk);
 		htx_to_buf(htx, appbuf);
+	}
 
 	TRACE_LEAVE(H3_EV_RX_FRAME|H3_EV_RX_HDR, qcs->qcc->conn, qcs);
 	return len;
@@ -1377,6 +1380,7 @@ static ssize_t h3_trailers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	struct buffer *appbuf = NULL;
 	struct htx *htx = NULL;
 	struct htx_sl *sl;
+	struct htx_blk *tailblk = NULL;
 	struct http_hdr list[global.tune.max_http_hdr * 2];
 	int hdr_idx, ret;
 	const char *ctl;
@@ -1387,7 +1391,7 @@ static ssize_t h3_trailers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	TRACE_ENTER(H3_EV_RX_FRAME|H3_EV_RX_HDR, qcs->qcc->conn, qcs);
 
 	/* TODO support buffer wrapping */
-	BUG_ON(b_head(buf) + len >= b_wrap(buf));
+	BUG_ON(b_head(buf) + len > b_wrap(buf));
 	ret = qpack_decode_fs((const unsigned char *)b_head(buf), len, tmp,
 	                    list, sizeof(list) / sizeof(list[0]));
 	if (ret < 0) {
@@ -1407,6 +1411,7 @@ static ssize_t h3_trailers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	}
 	BUG_ON(!b_size(appbuf)); /* TODO */
 	htx = htx_from_buf(appbuf);
+	tailblk = htx_get_tail_blk(htx);
 
 	if (!h3s->data_len) {
 		/* Notify that no body is present. This can only happens if
@@ -1506,7 +1511,7 @@ static ssize_t h3_trailers_to_htx(struct qcs *qcs, const struct buffer *buf,
 	}
 
 	/* Check the number of blocks against "tune.http.maxhdr" value before adding EOT block */
-	if (htx_nbblks(htx) > global.tune.max_http_hdr) {
+	if (hdr_idx > global.tune.max_http_hdr) {
 		len = -1;
 		goto out;
 	}
@@ -1522,8 +1527,11 @@ static ssize_t h3_trailers_to_htx(struct qcs *qcs, const struct buffer *buf,
 
  out:
 	/* HTX may be non NULL if error before previous htx_to_buf(). */
-	if (appbuf)
+	if (appbuf) {
+		if ((ssize_t)len < 0)
+			htx_truncate_blk(htx, tailblk);
 		htx_to_buf(htx, appbuf);
+	}
 
 	TRACE_LEAVE(H3_EV_RX_FRAME|H3_EV_RX_HDR, qcs->qcc->conn, qcs);
 	return len;
@@ -1746,6 +1754,14 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 
 	if (!b_data(b) && fin && quic_stream_is_bidi(qcs->id)) {
 		TRACE_PROTO("received FIN without data", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
+
+		/* FIN received, ensure body length is conform to any content-length header. */
+		if ((h3s->flags & H3_SF_HAVE_CLEN) && h3_check_body_size(qcs, 1)) {
+			qcc_abort_stream_read(qcs);
+			qcc_reset_stream(qcs, h3s->err);
+			goto done;
+		}
+
 		if (qcs_http_handle_standalone_fin(qcs)) {
 			TRACE_ERROR("cannot set EOM", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
 			qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1);
@@ -1802,10 +1818,11 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 		flen = h3s->demux_frame_len;
 		ftype = h3s->demux_frame_type;
 
-		/* Do not demux incomplete frames except H3 DATA which can be
-		 * fragmented in multiple HTX blocks.
+		/* Current HTTP/3 parser can currently only parse fully
+		 * received and aligned frames. The only exception is for DATA
+		 * frames as they can frequently be larger than bufsize.
 		 */
-		if (flen > b_data(b) && ftype != H3_FT_DATA) {
+		if (ftype != H3_FT_DATA) {
 			/* Reject frames bigger than bufsize.
 			 *
 			 * TODO HEADERS should in complement be limited with H3
@@ -1818,7 +1835,20 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 				qcc_report_glitch(qcs->qcc, 1);
 				goto err;
 			}
-			break;
+
+			/* TODO extend parser to support the realignment of a frame. */
+			if (b_head(b) + b_data(b) > b_wrap(b)) {
+				TRACE_ERROR("cannot parse unaligned data frame", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
+				qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1);
+				qcc_report_glitch(qcs->qcc, 1);
+				goto err;
+			}
+
+			/* Only parse full HTTP/3 frames. */
+			if (flen > b_data(b)) {
+				TRACE_PROTO("pause parsing on incomplete payload", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
+				break;
+			}
 		}
 
 		last_stream_frame = (fin && flen == b_data(b));
@@ -3346,8 +3376,61 @@ static void h3_trace(enum trace_level level, uint64_t mask,
 	}
 }
 
+/* Cancel a request on stream id <id>. This is useful when the client opens a
+ * new stream but the MUX has already been released. A STOP_SENDING +
+ * RESET_STREAM frames are prepared for emission.
+ *
+ * Returns 1 on success else 0.
+ */
+int h3_reject(struct list *out, uint64_t id)
+{
+	int ret = 0;
+	struct quic_frame *ss, *rs;
+	const uint64_t app_error_code = H3_ERR_REQUEST_REJECTED;
+
+	TRACE_ENTER(H3_EV_TX_FRAME);
+
+	/* Do not emit rejection for unknown unidirectional stream as it is
+	 * forbidden to close some of them (H3 control stream and QPACK
+	 * encoder/decoder streams).
+	 */
+	if (quic_stream_is_uni(id)) {
+		ret = 1;
+		goto out;
+	}
+
+	ss = qc_frm_alloc(QUIC_FT_STOP_SENDING);
+	if (!ss) {
+		TRACE_ERROR("failed to allocate quic_frame", H3_EV_TX_FRAME);
+		goto out;
+	}
+
+	ss->stop_sending.id = id;
+	ss->stop_sending.app_error_code = app_error_code;
+
+	rs = qc_frm_alloc(QUIC_FT_RESET_STREAM);
+	if (!rs) {
+		TRACE_ERROR("failed to allocate quic_frame", H3_EV_TX_FRAME);
+		qc_frm_free(NULL, &ss);
+		goto out;
+	}
+
+	rs->reset_stream.id = id;
+	rs->reset_stream.app_error_code = app_error_code;
+	rs->reset_stream.final_size = 0;
+
+	LIST_APPEND(out, &ss->list);
+	LIST_APPEND(out, &rs->list);
+	ret = 1;
+ out:
+	TRACE_LEAVE(H3_EV_TX_FRAME);
+	return ret;
+}
+
 /* HTTP/3 application layer operations */
 const struct qcc_app_ops h3_ops = {
+	.alpn        = "h3",
+
 	.init        = h3_init,
 	.finalize    = h3_finalize,
 	.attach      = h3_attach,
@@ -3361,4 +3444,5 @@ const struct qcc_app_ops h3_ops = {
 	.inc_err_cnt = h3_stats_inc_err_cnt,
 	.report_susp = h3_report_susp,
 	.release     = h3_release,
+	.strm_reject = h3_reject,
 };

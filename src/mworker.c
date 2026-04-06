@@ -121,11 +121,11 @@ void mworker_proc_list_to_env()
 
 		if (child->options & PROC_O_TYPE_MASTER)
 			type = 'm';
-		else if (child->options &= PROC_O_TYPE_WORKER)
+		else if (child->options & PROC_O_TYPE_WORKER)
 			type = 'w';
 
 		if (child->pid > -1)
-			memprintf(&msg, "%s|type=%c;fd=%d;cfd=%d;pid=%d;reloads=%d;failedreloads=%d;timestamp=%d;id=%s;version=%s", msg ? msg : "", type, child->ipc_fd[0], child->ipc_fd[1], child->pid, child->reloads, child->failedreloads, child->timestamp, child->id ? child->id : "", child->version);
+			memprintf(&msg, "%s|type=%c;fd=%d;cfd=%d;pid=%d;reloads=%d;failedreloads=%d;timestamp=%d;id=%s;version=%s", msg ? msg : "", type, child->ipc_fd[0], child->ipc_fd[1], child->pid, child->reloads, child->failedreloads, child->timestamp, child->id ? child->id : "", child->version ? child->version : "");
 	}
 	if (msg)
 		setenv("HAPROXY_PROCESSES", msg, 1);
@@ -223,7 +223,20 @@ int mworker_env_to_proc_list()
 			}
 		}
 		if (child->pid > 0) {
-			LIST_APPEND(&proc_list, &child->list);
+			struct list *insert_pt = &proc_list;
+			struct mworker_proc *pos;
+
+			/* insert at the right position in ASC reload order;
+			 * search from the tail since items are sorted most of
+			 * the time
+			 */
+			list_for_each_entry_rev(pos, &proc_list, list) {
+				if (pos->reloads <= child->reloads) {
+					insert_pt = &pos->list;
+					break;
+				}
+			}
+			LIST_INSERT(insert_pt, &child->list);
 		} else {
 			mworker_free_child(child);
 		}
@@ -232,28 +245,18 @@ int mworker_env_to_proc_list()
 	/* set the leaving processes once we know which number of reloads are the current processes */
 
 	list_for_each_entry(child, &proc_list, list) {
-		if (child->reloads > 0)
+		if (child->reloads > 0  && !(child->options & PROC_O_TYPE_MASTER))
 			child->options |= PROC_O_LEAVING;
 	}
 
 	unsetenv("HAPROXY_PROCESSES");
 
 no_env:
-
+	/* couldn't find the master element, exiting  */
 	if (!proc_self) {
-
-		proc_self = mworker_proc_new();
-		if (!proc_self) {
-			ha_alert("Cannot allocate process structures.\n");
-			err = -1;
-			goto out;
-		}
-		proc_self->options |= PROC_O_TYPE_MASTER;
-		proc_self->pid = pid;
-		proc_self->timestamp = 0; /* we don't know the startime anymore */
-
-		LIST_APPEND(&proc_list, &proc_self->list);
-		ha_warning("The master internals are corrupted or it was started with a too old version (< 1.9). Please restart the master process.\n");
+		err = -1;
+		ha_alert("Failed to deserialize data for the master process. Unrecoverable error, exiting.\n");
+		goto out;
 	}
 
 out:
@@ -825,7 +828,7 @@ void mworker_cleanup_proc()
 
 struct cli_showproc_ctx {
 	int debug;
-	int next_reload; /* reload number to resume from, 0 = from the beginning  */
+	int resume_reload; /* reload count of the last flushed old worker row, 0 = none yet */
 };
 
 /* Append a single worker row to trash (shared between current/old sections) */
@@ -860,7 +863,7 @@ static int cli_io_handler_show_proc(struct appctx *appctx)
 
 	chunk_reset(&trash);
 
-	if (ctx->next_reload == 0) {
+	if (ctx->resume_reload == 0) {
 		memprintf(&reloadtxt, "%d [failed: %d]", proc_self->reloads, proc_self->failedreloads);
 		chunk_printf(&trash, "#%-14s %-15s %-15s %-15s %-15s", "<PID>", "<type>", "<reloads>", "<uptime>", "<version>");
 		if (ctx->debug)
@@ -878,12 +881,12 @@ static int cli_io_handler_show_proc(struct appctx *appctx)
 	ha_free(&uptime);
 
 	/* displays current processes */
-	if (ctx->next_reload == 0)
+	if (ctx->resume_reload == 0)
 		chunk_appendf(&trash, "# workers\n");
 	list_for_each_entry(child, &proc_list, list) {
 
 		/* don't display current worker if we only need the next ones */
-		if (ctx->next_reload != 0)
+		if (ctx->resume_reload != 0)
 			continue;
 
 		if (!(child->options & PROC_O_TYPE_WORKER))
@@ -900,34 +903,69 @@ static int cli_io_handler_show_proc(struct appctx *appctx)
 		return 0;
 
 	/* displays old processes */
-	if (old || ctx->next_reload) { /* there's more */
-		if (ctx->next_reload == 0)
+	if (old || ctx->resume_reload) { /* there's more */
+		int skip = ctx->resume_reload; /* if resuming, skip until we pass this reload count */
+		int prev_reload = 0; /* previous LEAVING entry's reload count during skip phase */
+
+		if (!ctx->resume_reload)
 			chunk_appendf(&trash, "# old workers\n");
 		list_for_each_entry(child, &proc_list, list) {
-			/* If we're resuming, skip entries that were already printed (reload >= ctx->next_reload) */
-			if (ctx->next_reload && child->reloads >= ctx->next_reload)
-				continue;
-
 			if (!(child->options & PROC_O_TYPE_WORKER))
 				continue;
 
-			if (child->options & PROC_O_LEAVING) {
-				cli_append_worker_row(ctx, child, date.tv_sec);
+			if (!(child->options & PROC_O_LEAVING))
+				continue;
 
-				/* Try to flush so we can resume after this reload on next page if the buffer is full. */
-				if (applet_putchk(appctx, &trash) == -1) {
-					/* resume at this reload (exclude it on next pass) */
-					ctx->next_reload = child->reloads; /* resume after entries >= this reload */
-					return 0;
+			/* When resuming after a flush failure, skip entries
+			 * up to and including the last successfully flushed
+			 * row (identified by its reload count). This is
+			 * direction-agnostic: works whether the list is in
+			 * ascending or descending reload order.
+			 *
+			 * If the target entry was deleted from proc_list
+			 * (e.g. process exited between handler calls), we
+			 * detect that we've passed its former position when
+			 * two consecutive LEAVING entries straddle the skip
+			 * value — i.e. one has reloads > skip and the next
+			 * has reloads < skip (or vice versa). In that case
+			 * we stop skipping and emit the current entry.
+			 */
+			if (skip) {
+				if (child->reloads == skip) {
+					skip = 0; /* found it, resume from the next entry */
+					prev_reload = 0;
+					continue;
 				}
-				chunk_reset(&trash);
+				if (prev_reload &&
+				    ((prev_reload > skip) != (child->reloads > skip))) {
+					/* Crossed where skip would have been —
+					 * the entry was deleted. Stop skipping
+					 * and fall through to emit this entry.
+					 */
+					skip = 0;
+				} else {
+					prev_reload = child->reloads;
+					continue;
+				}
 			}
 
+			cli_append_worker_row(ctx, child, date.tv_sec);
+
+			if (applet_putchk(appctx, &trash) == -1) {
+				/* ctx->resume_reload already holds the last
+				 * flushed row or 0; don't update it here so
+				 * the failed row will be replayed.
+				 */
+				return 0;
+			}
+			/* This row was successfully flushed, remember it */
+			ctx->resume_reload = child->reloads;
+			chunk_reset(&trash);
 		}
 	}
 
 	/* dump complete: reset resume cursor so next 'show proc' starts from the top */
-	ctx->next_reload = 0;
+	ctx->resume_reload = 0;
 	return 1;
 }
 

@@ -26,6 +26,7 @@
 
 #include <haproxy/api.h>
 #include <haproxy/applet-t.h>
+#include <haproxy/counters.h>
 #include <haproxy/freq_ctr.h>
 #include <haproxy/list.h>
 #include <haproxy/listener-t.h>
@@ -58,7 +59,7 @@ void stop_proxy(struct proxy *p);
 int  stream_set_backend(struct stream *s, struct proxy *be);
 
 void deinit_proxy(struct proxy *p);
-void free_proxy(struct proxy *p);
+void proxy_drop(struct proxy *p);
 const char *proxy_cap_str(int cap);
 const char *proxy_mode_str(int mode);
 enum pr_mode str_to_proxy_mode(const char *mode);
@@ -82,6 +83,7 @@ void proxy_unref_defaults(struct proxy *px);
 int setup_new_proxy(struct proxy *px, const char *name, unsigned int cap, char **errmsg);
 struct proxy *alloc_new_proxy(const char *name, unsigned int cap,
                               char **errmsg);
+void proxy_take(struct proxy *px);
 struct proxy *parse_new_proxy(const char *name, unsigned int cap,
                               const char *file, int linenum,
                               const struct proxy *defproxy);
@@ -100,6 +102,8 @@ void free_stick_rules(struct list *rules);
 void free_server_rules(struct list *srules);
 int proxy_init_per_thr(struct proxy *px);
 int proxy_finalize(struct proxy *px, int *err_code);
+
+int be_check_for_deletion(const char *bename, struct proxy **pb, const char **pm);
 
 /*
  * This function returns a string containing the type of the proxy in a format
@@ -178,7 +182,7 @@ static inline void proxy_inc_fe_conn_ctr(struct listener *l, struct proxy *fe)
 	}
 	if (l && l->counters && l->counters->shared.tg)
 		_HA_ATOMIC_INC(&l->counters->shared.tg[tgid - 1]->cum_conn);
-	HA_ATOMIC_UPDATE_MAX(&fe->fe_counters.cps_max,
+	COUNTERS_UPDATE_MAX(&fe->fe_counters.cps_max,
 	                     update_freq_ctr(&fe->fe_counters._conn_per_sec, 1));
 }
 
@@ -191,7 +195,7 @@ static inline void proxy_inc_fe_sess_ctr(struct listener *l, struct proxy *fe)
 	}
 	if (l && l->counters && l->counters->shared.tg)
 		_HA_ATOMIC_INC(&l->counters->shared.tg[tgid - 1]->cum_sess);
-	HA_ATOMIC_UPDATE_MAX(&fe->fe_counters.sps_max,
+	COUNTERS_UPDATE_MAX(&fe->fe_counters.sps_max,
 			     update_freq_ctr(&fe->fe_counters._sess_per_sec, 1));
 }
 
@@ -218,7 +222,7 @@ static inline void proxy_inc_be_ctr(struct proxy *be)
 		_HA_ATOMIC_INC(&be->be_counters.shared.tg[tgid - 1]->cum_sess);
 		update_freq_ctr(&be->be_counters.shared.tg[tgid - 1]->sess_per_sec, 1);
 	}
-	HA_ATOMIC_UPDATE_MAX(&be->be_counters.sps_max,
+	COUNTERS_UPDATE_MAX(&be->be_counters.sps_max,
 			     update_freq_ctr(&be->be_counters._sess_per_sec, 1));
 }
 
@@ -238,7 +242,7 @@ static inline void proxy_inc_fe_req_ctr(struct listener *l, struct proxy *fe,
 	}
 	if (l && l->counters && l->counters->shared.tg)
 		_HA_ATOMIC_INC(&l->counters->shared.tg[tgid - 1]->p.http.cum_req[http_ver]);
-	HA_ATOMIC_UPDATE_MAX(&fe->fe_counters.p.http.rps_max,
+	COUNTERS_UPDATE_MAX(&fe->fe_counters.p.http.rps_max,
 	                     update_freq_ctr(&fe->fe_counters.p.http._req_per_sec, 1));
 }
 

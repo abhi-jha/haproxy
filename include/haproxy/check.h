@@ -78,12 +78,11 @@ struct task *process_chk(struct task *t, void *context, unsigned int state);
 struct task *srv_chk_io_cb(struct task *t, void *ctx, unsigned int state);
 
 int check_buf_available(void *target);
-struct buffer *check_get_buf(struct check *check, struct buffer *bptr);
+struct buffer *check_get_buf(struct check *check, struct buffer *bptr, unsigned int small_buffer);
 void check_release_buf(struct check *check, struct buffer *bptr);
 const char *init_check(struct check *check, int type);
 void free_check(struct check *check);
 void check_purge(struct check *check);
-int wake_srv_chk(struct stconn *sc);
 
 int init_srv_check(struct server *srv);
 int init_srv_agent_check(struct server *srv);

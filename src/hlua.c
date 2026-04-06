@@ -57,7 +57,6 @@
 #include <haproxy/session.h>
 #include <haproxy/ssl_ckch.h>
 #include <haproxy/ssl_sock.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stconn.h>
 #include <haproxy/stream.h>
 #include <haproxy/task.h>
@@ -382,6 +381,7 @@ static const char *hlua_pushfstring_safe(lua_State *L, const char *fmt, ...)
 
 /* Applet status flags */
 #define APPLET_DONE     0x01 /* applet processing is done. */
+#define APPLET_REQ_RECV 0x02 /* The request was fully received */
 /* unused: 0x02 */
 #define APPLET_HDR_SENT 0x04 /* Response header sent. */
 /* unused: 0x08, 0x10 */
@@ -4926,7 +4926,7 @@ __LJMP static int hlua_run_sample_fetch(lua_State *L)
 
 	/* Run the sample fetch process. */
 	smp_set_owner(&smp, hsmp->p, hsmp->s->sess, hsmp->s, hsmp->dir & SMP_OPT_DIR);
-	if (!f->process(args, &smp, f->kw, f->private)) {
+	if (!EXEC_CTX_WITH_RET(f->exec_ctx, f->process(args, &smp, f->kw, f->private))) {
 		if (hsmp->flags & HLUA_F_AS_STRING)
 			lua_pushstring(L, "");
 		else
@@ -5059,7 +5059,7 @@ __LJMP static int hlua_run_sample_conv(lua_State *L)
 	}
 
 	/* Run the sample conversion process. */
-	if (!conv->process(args, &smp, conv->private)) {
+	if (!EXEC_CTX_WITH_RET(conv->exec_ctx, conv->process(args, &smp, conv->private))) {
 		if (hsmp->flags & HLUA_F_AS_STRING)
 			lua_pushstring(L, "");
 		else
@@ -5306,6 +5306,9 @@ __LJMP static int hlua_applet_tcp_getline_yield(lua_State *L, int status, lua_KC
 
 	/* End of data: commit the total strings and return. */
 	if (ret < 0) {
+		/* Stop to consume */
+		applet_wont_consume(luactx->appctx);
+
 		luaL_pushresult(&luactx->b);
 		return 1;
 	}
@@ -5320,6 +5323,10 @@ __LJMP static int hlua_applet_tcp_getline_yield(lua_State *L, int status, lua_KC
 		luaL_addlstring(&luactx->b, blk2, len2);
 
 	applet_skip_input(luactx->appctx, len1+len2);
+
+	/* Stop to consume until the next receive */
+	applet_wont_consume(luactx->appctx);
+
 	luaL_pushresult(&luactx->b);
 	return 1;
 }
@@ -5328,6 +5335,9 @@ __LJMP static int hlua_applet_tcp_getline_yield(lua_State *L, int status, lua_KC
 __LJMP static int hlua_applet_tcp_getline(lua_State *L)
 {
 	struct hlua_appctx *luactx = MAY_LJMP(hlua_checkapplet_tcp(L, 1));
+
+	/* Restart to consume - could have been disabled by a previous receive */
+	applet_will_consume(luactx->appctx);
 
 	/* Initialise the string catenation. */
 	luaL_buffinit(L, &luactx->b);
@@ -5355,6 +5365,9 @@ __LJMP static int hlua_applet_tcp_recv_try(lua_State *L)
 	/* Data not yet available. return yield. */
 	if (ret == 0) {
 		if (tick_is_expired(exp_date, now_ms)) {
+			/* Stop to consume until the next receive */
+			applet_wont_consume(luactx->appctx);
+
 			/* return the result. */
 			lua_pushnil(L);
 			return 1;
@@ -5366,6 +5379,9 @@ __LJMP static int hlua_applet_tcp_recv_try(lua_State *L)
 
 	/* End of data: commit the total strings and return. */
 	if (ret < 0) {
+		/* Stop to consume */
+		applet_wont_consume(luactx->appctx);
+
 		luaL_pushresult(&luactx->b);
 		return 1;
 	}
@@ -5386,6 +5402,9 @@ __LJMP static int hlua_applet_tcp_recv_try(lua_State *L)
 		applet_skip_input(luactx->appctx, len1+len2);
 
 		if (tick_is_expired(exp_date, now_ms)) {
+			/* Stop to consume until the next receive */
+			applet_wont_consume(luactx->appctx);
+
 			/* return the result. */
 			luaL_pushresult(&luactx->b);
 			return 1;
@@ -5419,6 +5438,9 @@ __LJMP static int hlua_applet_tcp_recv_try(lua_State *L)
 			applet_need_more_data(luactx->appctx);
 			return 0;
 		}
+
+		/* Stop to consume until the next receive */
+		applet_wont_consume(luactx->appctx);
 
 		/* return the result. */
 		luaL_pushresult(&luactx->b);
@@ -5474,6 +5496,9 @@ __LJMP static int hlua_applet_tcp_recv(lua_State *L)
 	exp_date = delay ? tick_add(now_ms, delay) : TICK_ETERNITY;
 	lua_pushinteger(L, exp_date);
 
+	/* Restart to consume - could have been disabled by a previous receive */
+	applet_will_consume(luactx->appctx);
+
 	/* Initialise the string catenation. */
 	luaL_buffinit(L, &luactx->b);
 
@@ -5494,6 +5519,9 @@ __LJMP static int hlua_applet_tcp_try_recv(lua_State *L)
 
 	/* set the expiration date (mandatory arg but not relevant here) */
 	lua_pushinteger(L, now_ms);
+
+	/* Restart to consume - could have been disabled by a previous receive */
+	applet_will_consume(luactx->appctx);
 
 	/* Initialise the string catenation. */
 	luaL_buffinit(L, &luactx->b);
@@ -5771,10 +5799,14 @@ __LJMP static int hlua_applet_http_get_priv(lua_State *L)
 __LJMP static int hlua_applet_http_getline_yield(lua_State *L, int status, lua_KContext ctx)
 {
 	struct hlua_appctx *luactx = MAY_LJMP(hlua_checkapplet_http(L, 1));
+	struct hlua_http_ctx *http_ctx = luactx->appctx->svcctx;
 	struct buffer *inbuf = applet_get_inbuf(luactx->appctx);
 	struct htx *htx;
 	struct htx_blk *blk;
 	int stop = 0;
+
+	if (http_ctx->flags & APPLET_REQ_RECV)
+		goto end;
 
 	if (!inbuf)
 		goto wait;
@@ -5824,8 +5856,10 @@ __LJMP static int hlua_applet_http_getline_yield(lua_State *L, int status, lua_K
 	/* The message was fully consumed and no more data are expected
 	 * (EOM flag set).
 	 */
-	if (htx_is_empty(htx) && (htx->flags & HTX_FL_EOM))
+	if (htx_is_empty(htx) && (htx->flags & HTX_FL_EOM)) {
+		http_ctx->flags |= APPLET_REQ_RECV;
 		stop = 1;
+	}
 
 	htx_to_buf(htx, inbuf);
 	if (!stop) {
@@ -5833,6 +5867,10 @@ __LJMP static int hlua_applet_http_getline_yield(lua_State *L, int status, lua_K
 		applet_need_more_data(luactx->appctx);
 		MAY_LJMP(hlua_yieldk(L, 0, 0, hlua_applet_http_getline_yield, TICK_ETERNITY, 0));
 	}
+
+  end:
+	/* Stop to consume until the next receive or the end of the response */
+	applet_wont_consume(luactx->appctx);
 
 	/* return the result. */
 	luaL_pushresult(&luactx->b);
@@ -5844,6 +5882,9 @@ __LJMP static int hlua_applet_http_getline_yield(lua_State *L, int status, lua_K
 __LJMP static int hlua_applet_http_getline(lua_State *L)
 {
 	struct hlua_appctx *luactx = MAY_LJMP(hlua_checkapplet_http(L, 1));
+
+	/* Restart to consume - could have been disabled by a previous receive */
+	applet_will_consume(luactx->appctx);
 
 	/* Initialise the string catenation. */
 	luaL_buffinit(L, &luactx->b);
@@ -5858,10 +5899,14 @@ __LJMP static int hlua_applet_http_getline(lua_State *L)
 __LJMP static int hlua_applet_http_recv_yield(lua_State *L, int status, lua_KContext ctx)
 {
 	struct hlua_appctx *luactx = MAY_LJMP(hlua_checkapplet_http(L, 1));
+	struct hlua_http_ctx *http_ctx = luactx->appctx->svcctx;
 	struct buffer *inbuf = applet_get_inbuf(luactx->appctx);
 	struct htx *htx;
 	struct htx_blk *blk;
 	int len;
+
+	if (http_ctx->flags & APPLET_REQ_RECV)
+		goto end;
 
 	if (!inbuf)
 		goto wait;
@@ -5910,8 +5955,10 @@ __LJMP static int hlua_applet_http_recv_yield(lua_State *L, int status, lua_KCon
 	/* The message was fully consumed and no more data are expected
 	 * (EOM flag set).
 	 */
-	if (htx_is_empty(htx) && (htx->flags & HTX_FL_EOM))
+	if (htx_is_empty(htx) && (htx->flags & HTX_FL_EOM)) {
+		http_ctx->flags |= APPLET_REQ_RECV;
 		len = 0;
+	}
 
 	htx_to_buf(htx, inbuf);
 	applet_fl_clr(luactx->appctx, APPCTX_FL_INBLK_FULL);
@@ -5927,6 +5974,7 @@ __LJMP static int hlua_applet_http_recv_yield(lua_State *L, int status, lua_KCon
 		MAY_LJMP(hlua_yieldk(L, 0, 0, hlua_applet_http_recv_yield, TICK_ETERNITY, 0));
 	}
 
+  end:
 	/* Stop to consume until the next receive or the end of the response */
 	applet_wont_consume(luactx->appctx);
 
@@ -11074,8 +11122,11 @@ void hlua_applet_tcp_fct(struct appctx *ctx)
 		goto out;
 
 	/* The applet execution is already done. */
-	if (tcp_ctx->flags & APPLET_DONE)
+	if (tcp_ctx->flags & APPLET_DONE) {
+		/* Restart to consume to drain request data */
+		applet_will_consume(ctx);
 		goto out;
+	}
 
 	/* Execute the function. */
 	switch (hlua_ctx_resume(hlua, 1)) {
@@ -11083,6 +11134,9 @@ void hlua_applet_tcp_fct(struct appctx *ctx)
 	case HLUA_E_OK:
 		tcp_ctx->flags |= APPLET_DONE;
 		applet_set_eos(ctx);
+
+		/* Restart to consume to drain request data */
+		applet_will_consume(ctx);
 		break;
 
 	/* yield. */
@@ -11503,6 +11557,9 @@ void hlua_applet_http_fct(struct appctx *ctx)
 	if (!(strm->flags & SF_ERR_MASK))
 		strm->flags |= SF_ERR_RESOURCE;
 	http_ctx->flags |= APPLET_DONE;
+
+	/* Restart to consume to drain the request */
+	applet_will_consume(ctx);
 	goto out;
 }
 
@@ -14727,7 +14784,7 @@ static void hlua_deinit()
 			lua_close(hlua_states[thr]);
 	}
 
-	free_proxy(socket_proxy);
+	proxy_drop(socket_proxy);
 }
 
 REGISTER_POST_DEINIT(hlua_deinit);

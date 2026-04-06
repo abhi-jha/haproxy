@@ -147,8 +147,7 @@ void __tasklet_wakeup_on(struct tasklet *tl, int thr)
 			LIST_APPEND(&th_ctx->tasklets[TL_BULK], &tl->list);
 			th_ctx->tl_class_mask |= 1 << TL_BULK;
 		}
-		else if ((struct task *)tl == th_ctx->current) {
-			_HA_ATOMIC_OR(&tl->state, TASK_SELF_WAKING);
+		else if ((struct task *)tl == th_ctx->current && !(tl->state & TASK_WOKEN_ANY)) {
 			LIST_APPEND(&th_ctx->tasklets[TL_BULK], &tl->list);
 			th_ctx->tl_class_mask |= 1 << TL_BULK;
 		}
@@ -157,8 +156,8 @@ void __tasklet_wakeup_on(struct tasklet *tl, int thr)
 			th_ctx->tl_class_mask |= 1 << TL_URGENT;
 		}
 		else {
-			LIST_APPEND(&th_ctx->tasklets[th_ctx->current_queue], &tl->list);
-			th_ctx->tl_class_mask |= 1 << th_ctx->current_queue;
+			LIST_APPEND(&th_ctx->tasklets[TL_NORMAL], &tl->list);
+			th_ctx->tl_class_mask |= 1 << TL_NORMAL;
 		}
 		_HA_ATOMIC_INC(&th_ctx->rq_total);
 	} else {
@@ -186,8 +185,7 @@ struct list *__tasklet_wakeup_after(struct list *head, struct tasklet *tl)
 			LIST_INSERT(&th_ctx->tasklets[TL_BULK], &tl->list);
 			th_ctx->tl_class_mask |= 1 << TL_BULK;
 		}
-		else if ((struct task *)tl == th_ctx->current) {
-			_HA_ATOMIC_OR(&tl->state, TASK_SELF_WAKING);
+		else if ((struct task *)tl == th_ctx->current && !(tl->state & TASK_WOKEN_ANY)) {
 			LIST_INSERT(&th_ctx->tasklets[TL_BULK], &tl->list);
 			th_ctx->tl_class_mask |= 1 << TL_BULK;
 		}
@@ -196,8 +194,8 @@ struct list *__tasklet_wakeup_after(struct list *head, struct tasklet *tl)
 			th_ctx->tl_class_mask |= 1 << TL_URGENT;
 		}
 		else {
-			LIST_INSERT(&th_ctx->tasklets[th_ctx->current_queue], &tl->list);
-			th_ctx->tl_class_mask |= 1 << th_ctx->current_queue;
+			LIST_INSERT(&th_ctx->tasklets[TL_NORMAL], &tl->list);
+			th_ctx->tl_class_mask |= 1 << TL_NORMAL;
 		}
 	}
 	else {
@@ -563,13 +561,21 @@ unsigned int run_tasks_from_lists(unsigned int budgets[])
 			continue;
 		}
 
-		budgets[queue]--;
-		activity[tid].ctxsw++;
-
 		t = (struct task *)LIST_ELEM(tl_queues[queue].n, struct tasklet *, list);
+
+		/* check if this task has already run during this loop */
+		if ((uint16_t)t->last_run == (uint16_t)activity[tid].loops) {
+			budget_mask &= ~(1 << queue);
+			queue++;
+			continue;
+		}
+		t->last_run = activity[tid].loops;
 		ctx = t->context;
 		process = t->process;
 		t->calls++;
+
+		budgets[queue]--;
+		activity[tid].ctxsw++;
 
 		th_ctx->lock_wait_total = 0;
 		th_ctx->mem_wait_total = 0;
@@ -650,16 +656,19 @@ unsigned int run_tasks_from_lists(unsigned int budgets[])
 		if (state & TASK_F_TASKLET) {
 			/* this is a tasklet */
 
-			t = process(t, ctx, state);
+			t = EXEC_CTX_WITH_RET(EXEC_CTX_MAKE(TH_EX_CTX_TASK, process),
+			                      process(t, ctx, state));
 			if (t != NULL)
 				_HA_ATOMIC_AND(&t->state, ~TASK_RUNNING);
 		} else {
 			/* This is a regular task */
 
 			if (process == process_stream)
-				t = process_stream(t, ctx, state);
+				t = EXEC_CTX_WITH_RET(EXEC_CTX_MAKE(TH_EX_CTX_TASK, process_stream),
+				                      process_stream(t, ctx, state));
 			else
-				t = process(t, ctx, state);
+				t = EXEC_CTX_WITH_RET(EXEC_CTX_MAKE(TH_EX_CTX_TASK, process),
+			                              process(t, ctx, state));
 
 			/* If there is a pending state, we have to wake up the task
 			 * immediately, else we defer it into wait queue.
@@ -720,8 +729,8 @@ void process_runnable_tasks()
 	struct task *t;
 	const unsigned int default_weights[TL_CLASSES] = {
 		[TL_URGENT] = 64, // ~50% of CPU bandwidth for I/O
-		[TL_NORMAL] = 48, // ~37% of CPU bandwidth for tasks
-		[TL_BULK]   = 16, // ~13% of CPU bandwidth for self-wakers
+		[TL_NORMAL] = 60, // ~47% of CPU bandwidth for tasks
+		[TL_BULK]   = 4,  // ~3% of CPU bandwidth for self-wakers
 		[TL_HEAVY]  = 1,  // never more than 1 heavy task at once
 	};
 	unsigned int max[TL_CLASSES]; // max to be run per class
@@ -731,9 +740,11 @@ void process_runnable_tasks()
 	int max_processed;
 	int lpicked, gpicked;
 	int heavy_queued = 0;
-	int budget;
+	int budget, done;
 
 	_HA_ATOMIC_AND(&th_ctx->flags, ~TH_FL_STUCK); // this thread is still running
+
+	swrate_add_peak_local(&th_ctx->rq_tot_peak, RQ_LOAD_SAMPLES, th_ctx->rq_total);
 
 	if (!thread_has_tasks()) {
 		activity[tid].empty_rq++;
@@ -899,10 +910,11 @@ void process_runnable_tasks()
 	}
 
 	/* execute tasklets in each queue */
-	max_processed -= run_tasks_from_lists(max);
+	done = run_tasks_from_lists(max);
+	max_processed -= done;
 
 	/* some tasks may have woken other ones up */
-	if (max_processed > 0 && thread_has_tasks())
+	if (done && max_processed > 0 && thread_has_tasks())
 		goto not_done_yet;
 
  leave:

@@ -12,6 +12,7 @@ import functools
 import json
 import re
 import sys
+import urllib.error
 import urllib.request
 from os import environ
 from packaging import version
@@ -19,9 +20,10 @@ from packaging import version
 #
 # this CI is used for both development and stable branches of HAProxy
 #
-# naming convention used, if branch name matches:
+# naming convention used, if branch/tag name matches:
 #
 #   "haproxy-" - stable branches
+#   "vX.Y.Z"   - release tags
 #   otherwise  - development branch (i.e. "latest" ssl variants, "latest" github images)
 #
 
@@ -32,13 +34,24 @@ def get_all_github_tags(url):
     headers = {}
     if environ.get("GITHUB_TOKEN") is not None:
         headers["Authorization"] = "token {}".format(environ.get("GITHUB_TOKEN"))
-    request = urllib.request.Request(url, headers=headers)
-    try:
-        tags = urllib.request.urlopen(request)
-    except:
-        return None
-    tags = json.loads(tags.read().decode("utf-8"))
-    return [tag['name'] for tag in tags]
+    all_tags = []
+    page = 1
+    sep = "&" if "?" in url else "?"
+    while True:
+        paginated_url = "{}{}per_page=100&page={}".format(url, sep, page)
+        request = urllib.request.Request(paginated_url, headers=headers)
+        try:
+            response = urllib.request.urlopen(request)
+        except urllib.error.URLError:
+            return all_tags if all_tags else None
+        tags = json.loads(response.read().decode("utf-8"))
+        if not tags:
+            break
+        all_tags.extend([tag['name'] for tag in tags])
+        if len(tags) < 100:
+            break
+        page += 1
+    return all_tags if all_tags else None
 
 @functools.lru_cache(5)
 def determine_latest_openssl(ssl):
@@ -64,6 +77,8 @@ def determine_latest_aws_lc(ssl):
     if not tags:
         return "AWS_LC_VERSION=failed_to_detect"
     valid_tags = list(filter(aws_lc_version_valid, tags))
+    if not valid_tags:
+        return "AWS_LC_VERSION=failed_to_detect"
     latest_tag = max(valid_tags, key=aws_lc_version_string_to_num)
     return "AWS_LC_VERSION={}".format(latest_tag[1:])
 
@@ -75,11 +90,12 @@ def aws_lc_fips_version_valid(version_string):
 
 @functools.lru_cache(5)
 def determine_latest_aws_lc_fips(ssl):
-    # the AWS-LC-FIPS tags are at the end of the list, so let's get a lot
-    tags = get_all_github_tags("https://api.github.com/repos/aws/aws-lc/tags?per_page=200")
+    tags = get_all_github_tags("https://api.github.com/repos/aws/aws-lc/tags")
     if not tags:
         return "AWS_LC_FIPS_VERSION=failed_to_detect"
     valid_tags = list(filter(aws_lc_fips_version_valid, tags))
+    if not valid_tags:
+        return "AWS_LC_FIPS_VERSION=failed_to_detect"
     latest_tag = max(valid_tags, key=aws_lc_fips_version_string_to_num)
     return "AWS_LC_FIPS_VERSION={}".format(latest_tag[12:])
 
@@ -120,11 +136,13 @@ def clean_compression(compression):
 def main(ref_name):
     print("Generating matrix for branch '{}'.".format(ref_name))
 
+    is_stable = "haproxy-" in ref_name or re.match(r'^v\d+\.\d+\.\d+$', ref_name)
+
     matrix = []
 
     # Ubuntu
 
-    if "haproxy-" in ref_name:
+    if is_stable:
         os = "ubuntu-24.04"         # stable branch
         os_arm = "ubuntu-24.04-arm" # stable branch
     else:
@@ -228,7 +246,7 @@ def main(ref_name):
             # "BORINGSSL=yes",
         ]
 
-        if "haproxy-" not in ref_name: # development branch
+        if not is_stable: # development branch
             ssl_versions = ssl_versions + [
                 "OPENSSL_VERSION=latest",
                 "LIBRESSL_VERSION=latest",
@@ -276,7 +294,7 @@ def main(ref_name):
             )
 
     # macOS on dev branches
-    if "haproxy-" not in ref_name:
+    if not is_stable:
         os = "macos-26"     # development branch
 
         TARGET = "osx"

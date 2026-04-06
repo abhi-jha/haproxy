@@ -117,7 +117,6 @@
 #include <haproxy/sock_inet.h>
 #include <haproxy/ssl_sock.h>
 #include <haproxy/stats-file.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stream.h>
 #include <haproxy/systemd.h>
 #include <haproxy/task.h>
@@ -271,6 +270,10 @@ unsigned int tainted = 0;
 
 unsigned int experimental_directives_allowed = 0;
 unsigned int deprecated_directives_allowed = 0;
+
+/* mapped storage for collected libs */
+void *lib_storage = NULL;
+size_t lib_size = 0;
 
 int check_kw_experimental(struct cfg_keyword *kw, const char *file, int linenum,
                           char **errmsg)
@@ -1127,6 +1130,8 @@ static int read_cfg()
 	setenv("HAPROXY_HTTPS_LOG_FMT", default_https_log_format, 1);
 	setenv("HAPROXY_TCP_LOG_FMT", default_tcp_log_format, 1);
 	setenv("HAPROXY_TCP_CLF_LOG_FMT", clf_tcp_log_format, 1);
+	setenv("HAPROXY_KEYLOG_FC_LOG_FMT", keylog_format_fc, 1);
+	setenv("HAPROXY_KEYLOG_BC_LOG_FMT", keylog_format_bc, 1);
 	setenv("HAPROXY_BRANCH", PRODUCT_BRANCH, 1);
 	list_for_each_entry(cfg, &cfg_cfgfiles, list) {
 		int ret;
@@ -1645,18 +1650,11 @@ void haproxy_init_args(int argc, char **argv)
 					argc--; argv++;
 				}
 
-				ret = trace_parse_cmd(arg, &err_msg);
-				if (ret <= -1) {
-					if (ret < -1) {
-						ha_alert("-dt: %s.\n", err_msg);
-						ha_free(&err_msg);
-						exit(EXIT_FAILURE);
-					}
-					else {
-						printf("%s\n", err_msg);
-						ha_free(&err_msg);
-						exit(0);
-					}
+				ret = trace_add_cmd(arg, &err_msg);
+				if (ret) {
+					ha_alert("-dt: %s.\n", err_msg);
+					ha_free(&err_msg);
+					exit(EXIT_FAILURE);
 				}
 			}
 #ifdef HA_USE_KTLS
@@ -2176,7 +2174,7 @@ static void step_init_2(int argc, char** argv)
 
 	/* Free last defaults if it is unnamed and unreferenced. */
 	if (last_defproxy && last_defproxy->id[0] == '\0' &&
-	    !last_defproxy->conf.refcount) {
+	    !last_defproxy->conf.def_ref) {
 		defaults_px_destroy(last_defproxy);
 	}
 	last_defproxy = NULL; /* This variable is not used after parsing. */
@@ -2533,6 +2531,10 @@ static void step_init_2(int argc, char** argv)
 	chunk_appendf(&trash, "TARGET='%s'", pm_target_opts);
 
 	post_mortem_add_component("haproxy", haproxy_version, cc, cflags, opts, argv[0]);
+
+	if ((global.tune.options & (GTUNE_SET_DUMPABLE | GTUNE_COLLECT_LIBS)) ==
+	    (GTUNE_SET_DUMPABLE | GTUNE_COLLECT_LIBS))
+		collect_libs();
 }
 
 /* This is a third part of the late init sequence, where we register signals for
@@ -2824,20 +2826,16 @@ void deinit(void)
 	while (p) {
 		p0 = p;
 		p = p->next;
-		free_proxy(p0);
+		proxy_drop(p0);
 	}/* end while(p) */
 
 	/* we don't need to free sink_proxies_list nor cfg_log_forward proxies since
 	 * they are respectively cleaned up in sink_deinit() and deinit_log_forward()
 	 */
 
-	/* If named defaults were preserved, ensure refcount is resetted. */
+	/* If named defaults were preserved, ensure <def_ref> count is reset. */
 	if (!(global.tune.options & GTUNE_PURGE_DEFAULTS))
 		defaults_px_unref_all();
-	/* All proxies are removed now, so every defaults should also be freed
-	 * when their refcount reached zero.
-	 */
-	BUG_ON(!LIST_ISEMPTY(&defaults_list));
 
 	userlist_free(userlist);
 
@@ -2847,6 +2845,11 @@ void deinit(void)
 
 	list_for_each_entry(pdf, &post_deinit_list, list)
 		pdf->fct();
+
+	/* All proxies are removed now, so every defaults should also be freed
+	 * when their <def_ref> count reached zero.
+	 */
+	BUG_ON(!LIST_ISEMPTY(&defaults_list));
 
 	ha_free(&global.log_send_hostname);
 	chunk_destroy(&global.log_tag);
@@ -3487,6 +3490,7 @@ int main(int argc, char **argv)
 		list_for_each_entry_safe(cfg, cfg_tmp, &cfg_cfgfiles, list)
 			ha_free(&cfg->content);
 
+		trace_parse_cmds();
 		usermsgs_clr(NULL);
 	}
 
@@ -3780,6 +3784,7 @@ int main(int argc, char **argv)
 		char *msg = NULL;
 		char c;
 		int r __maybe_unused;
+		struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
 
 		if (socketpair(PF_UNIX, SOCK_STREAM, 0, sock_pair) == -1) {
 			ha_alert("[%s.main()] Cannot create socketpair to update the new worker state\n",
@@ -3789,9 +3794,11 @@ int main(int argc, char **argv)
 		}
 
 		list_for_each_entry(proc, &proc_list, list) {
-			if (proc->pid == -1)
+			if (proc->pid == -1 && proc->options & PROC_O_TYPE_WORKER)
 				break;
 		}
+
+		BUG_ON(!(proc->options & PROC_O_TYPE_WORKER));
 
 		if (send_fd_uxst(proc->ipc_fd[1], sock_pair[0]) == -1) {
 			ha_alert("[%s.main()] Cannot transfer connection fd %d over the sockpair@%d\n",
@@ -3816,6 +3823,7 @@ int main(int argc, char **argv)
 		 * we make sure that the fd is received correctly.
 		 */
 		shutdown(sock_pair[1], SHUT_WR);
+		setsockopt(sock_pair[1], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		r = read(sock_pair[1], &c, 1);
 		close(sock_pair[1]);
 		close(sock_pair[0]);

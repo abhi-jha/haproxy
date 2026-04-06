@@ -25,12 +25,13 @@
 
 
 #include <haproxy/connection.h>
+#include <haproxy/counters.h>
 #include <haproxy/openssl-compat.h>
 #include <haproxy/pool-t.h>
 #include <haproxy/proxy-t.h>
 #include <haproxy/quic_conn-t.h>
 #include <haproxy/ssl_sock-t.h>
-#include <haproxy/stats.h>
+#include <haproxy/stats-t.h>
 #include <haproxy/thread.h>
 
 extern struct list tlskeys_reference;
@@ -53,6 +54,7 @@ extern struct xprt_ops ssl_sock;
 extern int ssl_capture_ptr_index;
 extern int ssl_keylog_index;
 extern int ssl_client_sni_index;
+extern int ssl_crtname_index;
 extern struct pool_head *pool_head_ssl_keylog;
 extern struct pool_head *pool_head_ssl_keylog_str;
 extern struct list openssl_providers;
@@ -73,7 +75,7 @@ int ssl_sock_get_alpn(const struct connection *conn, void *xprt_ctx,
                       const char **str, int *len);
 int ssl_bio_and_sess_init(struct connection *conn, SSL_CTX *ssl_ctx,
                           SSL **ssl, BIO **bio, BIO_METHOD *bio_meth, void *ctx);
-int ssl_sock_srv_try_reuse_sess(struct ssl_sock_ctx *ctx, struct server *srv);
+void ssl_sock_srv_try_reuse_sess(struct ssl_sock_ctx *ctx, struct server *srv);
 const char *ssl_sock_get_sni(struct connection *conn);
 const char *ssl_sock_get_cert_sig(struct connection *conn);
 const char *ssl_sock_get_cipher_name(struct connection *conn);

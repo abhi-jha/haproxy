@@ -81,9 +81,19 @@ struct qcc {
 		struct quic_fctl fc; /* stream flow control applied on sending */
 		uint64_t buf_in_flight; /* sum of currently allocated Tx buffer sizes */
 		struct list frms; /* list of STREAM frames ready for sent */
-		struct quic_pacer pacer; /* engine used to pace emission */
-		int paced_sent_ctr; /* counter for when emission is interrupted due to pacing */
+		union {
+			struct {
+				/* quic */
+				struct quic_pacer pacer; /* engine used to pace emission */
+				int paced_sent_ctr; /* counter for when emission is interrupted due to pacing */
+			};
+			/* qstrm */
+			struct buffer qstrm_buf;
+		};
 	} tx;
+	struct {
+		struct buffer qstrm_buf;
+	} rx;
 
 	uint64_t largest_bidi_r; /* largest remote bidi stream ID opened. */
 	uint64_t largest_uni_r;  /* largest remote uni stream ID opened. */
@@ -164,13 +174,16 @@ struct qcs {
 		struct bdata_ctr data; /* data utilization counter. Note that <tot> is now used for now as accounting may be difficult with ncbuf. */
 	} rx;
 	struct {
+		union {
+			struct qc_stream_desc *stream; /* quic */
+			struct buffer qstrm_buf;       /* qstrm */
+		};
 		struct quic_fctl fc; /* stream flow control applied on sending */
 		struct quic_frame *msd_frm; /* MAX_STREAM_DATA frame prepared */
 	} tx;
 
 	struct eb64_node by_id;
 	uint64_t id;
-	struct qc_stream_desc *stream;
 
 	struct list el_recv; /* element of qcc.recv_list */
 	struct list el_send; /* element of qcc.send_list */
@@ -200,6 +213,8 @@ enum qcc_app_ops_close_side {
 
 /* QUIC application layer operations */
 struct qcc_app_ops {
+	const char *alpn;
+
 	/* Initialize <qcc> connection app context. */
 	int (*init)(struct qcc *qcc);
 	/* Finish connection initialization if prelude required. */
@@ -232,6 +247,9 @@ struct qcc_app_ops {
 	void (*inc_err_cnt)(void *ctx, int err_code);
 	/* Set QCC error code as suspicious activity has been detected. */
 	void (*report_susp)(void *ctx);
+
+	/* Free function to close a stream after MUX layer shutdown. */
+	int (*strm_reject)(struct list *out, uint64_t id);
 };
 
 #endif /* USE_QUIC */

@@ -75,6 +75,41 @@ enum {
 /* we have 4 buffer-wait queues, in highest to lowest emergency order */
 #define DYNBUF_NBQ              4
 
+/* execution context, for tracing resource usage or warning origins */
+enum thread_exec_ctx_type {
+	TH_EX_CTX_NONE = 0,                 /* context not filled */
+	TH_EX_CTX_OTHER,                    /* context only known by a generic pointer */
+	TH_EX_CTX_INITCALL,                 /* the pointer is an initcall providing file:line */
+	TH_EX_CTX_CALLER,                   /* the pointer is an ha_caller of the caller providing file:line etc */
+	TH_EX_CTX_SMPF,                     /* directly registered sample fetch function, using .smpf_kwl */
+	TH_EX_CTX_CONV,                     /* directly registered converter function, using .conv_kwl */
+	TH_EX_CTX_FUNC,                     /* hopefully recognizable function/callback, using .pointer */
+	TH_EX_CTX_ACTION,                   /* directly registered action function, using .action_kwl */
+	TH_EX_CTX_FLT,                      /* filter whose config is in .flt_conf */
+	TH_EX_CTX_MUX,                      /* mux whose mux_ops is in .mux_ops */
+	TH_EX_CTX_TASK,                     /* task or tasklet whose function is in .task */
+	TH_EX_CTX_APPLET,                   /* applet whose applet is in .applet */
+	TH_EX_CTX_CLI_KWL,                  /* CLI keyword list, using .cli_kwl */
+};
+
+struct thread_exec_ctx {
+	enum thread_exec_ctx_type type;
+	/* 32-bit hole here on 64-bit platforms */
+	union {
+		const void *pointer;        /* generic pointer (for other) */
+		const struct initcall *initcall;  /* used with TH_EX_CTX_INITCALL */
+		const struct ha_caller *ha_caller;  /* used with TH_EX_CTX_CALLER */
+		const struct sample_fetch_kw_list *smpf_kwl; /* used with TH_EX_CTX_SMPF */
+		const struct sample_conv_kw_list *conv_kwl;  /* used with TH_EX_CTX_CONV */
+		const struct action_kw_list *action_kwl;  /* used with TH_EX_CTX_ACTION */
+		const struct flt_conf *flt_conf;  /* used with TH_EX_CTX_FLTCONF */
+		const struct mux_ops *mux_ops;  /* used with TH_EX_CTX_MUX */
+		const struct task *(*task)(struct task *, void *, unsigned int); /* used with TH_EX_CTX_TASK */
+		const struct applet *applet;  /* used with TH_EX_CTX_APPLET */
+		const struct cli_kw_list *cli_kwl; /* used with TH_EX_CTX_CLI_KWL */
+	};
+};
+
 /* Thread group information. This defines a base and a count of global thread
  * IDs which belong to it, and which can be looked up into thread_info/ctx. It
  * is set up during parsing and is stable during operation. Thread groups start
@@ -172,8 +207,7 @@ struct thread_ctx {
 	uint64_t curr_mono_time;            /* latest system wide monotonic time (leaving poll) */
 
 	ulong lock_history;                 /* history of used locks, see thread.h for more details */
-
-	/* around 56 unused bytes here */
+	struct thread_exec_ctx exec_ctx;    /* current execution context when known, or NULL */
 
 	// fourth cache line here on 64 bits: accessed mostly using atomic ops
 	ALWAYS_ALIGN(64);
@@ -199,6 +233,7 @@ struct thread_ctx {
 	struct buffer *last_dump_buffer;        /* Copy of last buffer used for a dump; may be NULL or invalid; for post-mortem only */
 	unsigned long long total_streams;       /* Total number of streams created on this thread */
 	unsigned int stream_cnt;                /* Number of streams attached to this thread */
+	unsigned int rq_tot_peak;               /* total run queue size last call */
 
 	// around 68 bytes here for shared variables
 

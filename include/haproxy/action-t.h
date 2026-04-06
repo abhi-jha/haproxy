@@ -151,6 +151,7 @@ struct act_rule {
 			struct ist str;        /* string param (reason, header name, ...) */
 			struct lf_expr fmt;    /* log-format compatible expression */
 			struct my_regex *re;   /* used by replace-header/value/uri/path */
+			struct sample_expr *expr; /* sample expression used by HTTP action */
 		} http;                        /* args used by some HTTP rules */
 		struct http_reply *http_reply; /* HTTP response to be used by return/deny/tarpit rules */
 		struct redirect_rule *redir;   /* redirect rule or "http-request redirect" */
@@ -199,6 +200,11 @@ struct act_rule {
 			struct sample_expr *name; /* used to differentiate idle connections */
 		} attach_srv; /* 'attach-srv' rule */
 		struct {
+			enum log_orig_id orig;
+			char *profile_name;
+			struct log_profile *profile;
+		} do_log; /* 'do-log' action */
+		struct {
 			int value;
 			struct sample_expr *expr;
 		} expr_int; /* expr or int value (when expr is NULL)*/
@@ -206,6 +212,7 @@ struct act_rule {
 			void *p[4];
 		} act;                         /* generic pointers to be used by custom actions */
 	} arg;                                 /* arguments used by some actions */
+	struct thread_exec_ctx exec_ctx;       /* execution context */
 	struct {
 		char *file;                    /* file name where the rule appears (or NULL) */
 		int line;                      /* line number where the rule appears */
@@ -217,7 +224,9 @@ struct action_kw {
 	enum act_parse_ret (*parse)(const char **args, int *cur_arg, struct proxy *px,
 	                            struct act_rule *rule, char **err);
 	int flags;
+	/* 4 bytes here */
 	void *private;
+	struct thread_exec_ctx exec_ctx;       /* execution context */
 };
 
 struct action_kw_list {

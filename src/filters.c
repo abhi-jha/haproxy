@@ -69,15 +69,16 @@ static inline struct filter *resume_filter_list_start(struct stream *strm, struc
 
 	if (chn->flt.current) {
 		filter = chn->flt.current;
-		chn->flt.current = NULL;
 		if (!(chn_prod(chn)->flags & SC_FL_ERROR) &&
 		    !(chn->flags & (CF_READ_TIMEOUT|CF_WRITE_TIMEOUT))) {
 			(strm)->waiting_entity.type = STRM_ENTITY_NONE;
 			(strm)->waiting_entity.ptr = NULL;
 		}
 	}
-	else
+	else {
 		filter = flt_list_start(strm, chn);
+		chn->flt.current = filter;
+	}
 
 	return filter;
 }
@@ -85,22 +86,24 @@ static inline struct filter *resume_filter_list_start(struct stream *strm, struc
 static inline struct filter *resume_filter_list_next(struct stream *strm, struct channel *chn,
                                                      struct filter *filter)
 {
-	/* simply an alias to flt_list_next() */
-	return flt_list_next(strm, chn, filter);
+	filter = flt_list_next(strm, chn, filter);
+	chn->flt.current = filter;
+	return filter;
 }
 
 static inline void resume_filter_list_break(struct stream *strm, struct channel *chn,
                                             struct filter *filter, int ret)
 {
+	chn->flt.current = NULL;
 	if (ret == 0) {
 		strm->waiting_entity.type = STRM_ENTITY_FILTER;
 		strm->waiting_entity.ptr  = filter;
+		chn->flt.current = filter;
 	}
 	else if (ret < 0) {
 		strm->last_entity.type = STRM_ENTITY_FILTER;
 		strm->last_entity.ptr = filter;
 	}
-	chn->flt.current = filter;
 }
 
 /* List head of all known filter keywords */
@@ -246,6 +249,8 @@ parse_filter(char **args, int section_type, struct proxy *curpx,
 		cur_arg = 1;
 		kw = flt_find_kw(args[cur_arg]);
 		if (kw) {
+			/* default name is keyword name, unless overriden by parse func */
+			fconf->name = kw->kw;
 			if (!kw->parse) {
 				memprintf(err, "parsing [%s:%d] : '%s' : "
 					  "'%s' option is not implemented in this version (check build options).",
@@ -291,6 +296,136 @@ parse_filter(char **args, int section_type, struct proxy *curpx,
 
 
 }
+
+/*
+ * Parses the "filter-sequence" keyword
+ */
+static int
+parse_filter_sequence(char **args, int section_type, struct proxy *curpx,
+                      const struct proxy *defpx, const char *file, int line, char **err)
+{
+	/* filter-sequence cannot be defined on a default proxy */
+	if (curpx == defpx) {
+		memprintf(err, "parsing [%s:%d] : %s is not allowed in a 'default' section.",
+			  file, line, args[0]);
+		return -1;
+	}
+	if (strcmp(args[0], "filter-sequence") == 0) {
+		struct list *list;
+		char *str;
+		size_t cur_sep;
+
+		if (!*args[1]) {
+			memprintf(err,
+				  "parsing [%s:%d] : missing argument for '%s' in %s '%s'.",
+				  file, line, args[0], proxy_type_str(curpx), curpx->id);
+			goto error;
+		}
+
+		if (!strcmp(args[1], "request"))
+			list = &curpx->filter_sequence.req;
+		else if (!strcmp(args[1], "response"))
+			list = &curpx->filter_sequence.res;
+		else {
+			memprintf(err,
+				  "parsing [%s:%d] : expected either 'request' or 'response' for '%s' in %s '%s'.",
+				  file, line, args[0], proxy_type_str(curpx), curpx->id);
+			goto error;
+		}
+
+		if (!*args[2]) {
+			memprintf(err,
+				  "parsing [%s:%d] : missing filter list for '%s' in %s '%s'.",
+				  file, line, args[0], proxy_type_str(curpx), curpx->id);
+			goto error;
+		}
+
+		str = args[2];
+		while (str[0]) {
+			struct filter_sequence_elt *elt;
+
+			elt = calloc(1, sizeof(*elt));
+			if (!elt) {
+				memprintf(err, "'%s %s' : out of memory", args[0], args[1]);
+				goto error;
+			}
+
+			cur_sep = strcspn(str, ",");
+
+			elt->flt_name = my_strndup(str, cur_sep);
+			if (!elt->flt_name) {
+				ha_free(&elt);
+				goto error;
+			}
+
+			LIST_APPEND(list, &elt->list);
+
+			if (str[cur_sep])
+				str += cur_sep + 1;
+			else
+				str += cur_sep;
+		}
+	}
+
+	return 0;
+
+  error:
+	return -1;
+}
+
+static int compile_filter_sequence_elt(struct proxy *px, struct filter_sequence_elt *elt, char **errmsg)
+{
+	struct flt_conf *fconf;
+	int ret = ERR_NONE;
+
+	list_for_each_entry(fconf, &px->filter_configs, list) {
+		if (!strcmp(elt->flt_name, fconf->name)) {
+			elt->flt_conf = fconf;
+			break;
+		}
+	}
+	if (!elt->flt_conf) {
+		memprintf(errmsg, "invalid filter name: '%s' is not defined on the proxy", elt->flt_name);
+		ret = ERR_FATAL;
+	}
+
+	return ret;
+}
+
+/* after config is checked, time to resolve filter-sequence (both request and response)
+ * used on the proxy in order to associate filter names with valid flt_conf entries
+ * this will help decrease filter lookup time during runtime (filter ids are compared
+ * using their address, not string content)
+ */
+static int postcheck_filter_sequence(struct proxy *px)
+{
+	struct filter_sequence_elt *elt;
+	char *errmsg = NULL;
+	int ret = ERR_NONE;
+
+	list_for_each_entry(elt, &px->filter_sequence.req, list) {
+		ret = compile_filter_sequence_elt(px, elt, &errmsg);
+		if (ret & ERR_CODE) {
+			memprintf(&errmsg, "error while postparsing request filter-sequence '%s' : %s", elt->flt_name, errmsg);
+			goto error;
+		}
+	}
+	list_for_each_entry(elt, &px->filter_sequence.res, list) {
+		ret = compile_filter_sequence_elt(px, elt, &errmsg);
+		if (ret & ERR_CODE) {
+			memprintf(&errmsg, "error while postparsing response filter-sequence '%s' : %s", elt->flt_name, errmsg);
+			goto error;
+		}
+	}
+
+	return ret;
+
+ error:
+	ha_alert("%s: %s\n", px->id, errmsg);
+	ha_free(&errmsg);
+	return ret;
+}
+REGISTER_POST_PROXY_CHECK(postcheck_filter_sequence);
 
 /*
  * Calls 'init' callback for all filters attached to a proxy. This happens after
@@ -396,12 +531,23 @@ void
 flt_deinit(struct proxy *proxy)
 {
 	struct flt_conf *fconf, *back;
+	struct filter_sequence_elt *fsequence, *fsequenceb;
 
 	list_for_each_entry_safe(fconf, back, &proxy->filter_configs, list) {
 		if (fconf->ops->deinit)
 			fconf->ops->deinit(proxy, fconf);
 		LIST_DELETE(&fconf->list);
 		free(fconf);
+	}
+	list_for_each_entry_safe(fsequence, fsequenceb, &proxy->filter_sequence.req, list) {
+		LIST_DEL_INIT(&fsequence->list);
+		ha_free(&fsequence->flt_name);
+		ha_free(&fsequence);
+	}
+	list_for_each_entry_safe(fsequence, fsequenceb, &proxy->filter_sequence.res, list) {
+		LIST_DEL_INIT(&fsequence->list);
+		ha_free(&fsequence->flt_name);
+		ha_free(&fsequence);
 	}
 }
 
@@ -433,7 +579,7 @@ flt_deinit_all_per_thread()
 
 /* Attaches a filter to a stream. Returns -1 if an error occurs, 0 otherwise. */
 static int
-flt_stream_add_filter(struct stream *s, struct flt_conf *fconf, unsigned int flags)
+flt_stream_add_filter(struct stream *s, struct proxy *px, struct flt_conf *fconf, unsigned int flags)
 {
 	struct filter *f;
 
@@ -447,7 +593,8 @@ flt_stream_add_filter(struct stream *s, struct flt_conf *fconf, unsigned int fla
 	f->flags |= flags;
 
 	if (FLT_OPS(f)->attach) {
-		int ret = FLT_OPS(f)->attach(s, f);
+		struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, f->config);
+		int ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(f)->attach(s, f));
 		if (ret <= 0) {
 			pool_free(pool_head_filter, f);
 			return ret;
@@ -455,16 +602,36 @@ flt_stream_add_filter(struct stream *s, struct flt_conf *fconf, unsigned int fla
 	}
 
 	LIST_APPEND(&strm_flt(s)->filters, &f->list);
+	LIST_INIT(&f->req_list);
+	LIST_INIT(&f->res_list);
 
-	/* for now f->req_list == f->res_list to preserve
-	 * historical behavior, but the ordering will change
-	 * in the future
-	 */
-	LIST_APPEND(&s->req.flt.filters, &f->req_list);
-	LIST_APPEND(&s->res.flt.filters, &f->res_list);
+	/* use filter config ordering unless filter-sequence says otherwise */
+	if (LIST_ISEMPTY(&px->filter_sequence.req))
+		LIST_APPEND(&s->req.flt.filters, &f->req_list);
+	if (LIST_ISEMPTY(&px->filter_sequence.res))
+		LIST_APPEND(&s->res.flt.filters, &f->res_list);
 
 	strm_flt(s)->flags |= STRM_FLT_FL_HAS_FILTERS;
 	return 0;
+}
+
+static void flt_stream_organize_filters(struct stream *s, struct proxy *px)
+{
+	struct filter_sequence_elt *fsequence;
+	struct filter *filter;
+
+	list_for_each_entry(fsequence, &px->filter_sequence.req, list) {
+		list_for_each_entry(filter, &strm_flt(s)->filters, list) {
+			if (filter->config == fsequence->flt_conf && !LIST_INLIST(&filter->req_list))
+				LIST_APPEND(&s->req.flt.filters, &filter->req_list);
+		}
+	}
+	list_for_each_entry(fsequence, &px->filter_sequence.res, list) {
+		list_for_each_entry(filter, &strm_flt(s)->filters, list) {
+			if (filter->config == fsequence->flt_conf && !LIST_INLIST(&filter->res_list))
+				LIST_APPEND(&s->res.flt.filters, &filter->res_list);
+		}
+	}
 }
 
 /*
@@ -483,9 +650,10 @@ flt_stream_init(struct stream *s)
 	memset(&s->res.flt, 0, sizeof(s->res.flt));
 	LIST_INIT(&s->res.flt.filters);
 	list_for_each_entry(fconf, &strm_fe(s)->filter_configs, list) {
-		if (flt_stream_add_filter(s, fconf, 0) < 0)
+		if (flt_stream_add_filter(s, strm_fe(s), fconf, 0) < 0)
 			return -1;
 	}
+	flt_stream_organize_filters(s, strm_fe(s));
 	return 0;
 }
 
@@ -503,8 +671,10 @@ flt_stream_release(struct stream *s, int only_backend)
 	list_for_each_entry_safe(filter, back, &strm_flt(s)->filters, list) {
 		if (!only_backend || (filter->flags & FLT_FL_IS_BACKEND_FILTER)) {
 			filter->calls++;
-			if (FLT_OPS(filter)->detach)
-				FLT_OPS(filter)->detach(s, filter);
+			if (FLT_OPS(filter)->detach) {
+				struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+				EXEC_CTX_NO_RET(exec_ctx, FLT_OPS(filter)->detach(s, filter));
+			}
 			LIST_DELETE(&filter->list);
 			LIST_DELETE(&filter->req_list);
 			LIST_DELETE(&filter->res_list);
@@ -527,9 +697,14 @@ flt_stream_start(struct stream *s)
 
 	list_for_each_entry(filter, &strm_flt(s)->filters, list) {
 		if (FLT_OPS(filter)->stream_start) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			filter->calls++;
-			if (FLT_OPS(filter)->stream_start(s, filter) < 0)
+			if (EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->stream_start(s, filter) < 0)) {
+				s->last_entity.type = STRM_ENTITY_FILTER;
+				s->last_entity.ptr = filter;
 				return -1;
+			}
 		}
 	}
 	if (strm_li(s) && (strm_li(s)->bind_conf->analysers & AN_REQ_FLT_START_FE)) {
@@ -550,8 +725,10 @@ flt_stream_stop(struct stream *s)
 
 	list_for_each_entry(filter, &strm_flt(s)->filters, list) {
 		if (FLT_OPS(filter)->stream_stop) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			filter->calls++;
-			FLT_OPS(filter)->stream_stop(s, filter);
+			EXEC_CTX_NO_RET(exec_ctx, FLT_OPS(filter)->stream_stop(s, filter));
 		}
 	}
 }
@@ -567,8 +744,10 @@ flt_stream_check_timeouts(struct stream *s)
 
 	list_for_each_entry(filter, &strm_flt(s)->filters, list) {
 		if (FLT_OPS(filter)->check_timeouts) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			filter->calls++;
-			FLT_OPS(filter)->check_timeouts(s, filter);
+			EXEC_CTX_NO_RET(exec_ctx, FLT_OPS(filter)->check_timeouts(s, filter));
 		}
 	}
 }
@@ -588,15 +767,19 @@ flt_set_stream_backend(struct stream *s, struct proxy *be)
 		goto end;
 
 	list_for_each_entry(fconf, &be->filter_configs, list) {
-		if (flt_stream_add_filter(s, fconf, FLT_FL_IS_BACKEND_FILTER) < 0)
+		if (flt_stream_add_filter(s, be, fconf, FLT_FL_IS_BACKEND_FILTER) < 0)
 			return -1;
 	}
+
+	flt_stream_organize_filters(s, be);
 
   end:
 	list_for_each_entry(filter, &strm_flt(s)->filters, list) {
 		if (FLT_OPS(filter)->stream_set_backend) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			filter->calls++;
-			if (FLT_OPS(filter)->stream_set_backend(s, filter, be) < 0) {
+			if (EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->stream_set_backend(s, filter, be) < 0)) {
 				s->last_entity.type = STRM_ENTITY_FILTER;
 				s->last_entity.ptr = filter;
 				return -1;
@@ -644,9 +827,11 @@ flt_http_end(struct stream *s, struct http_msg *msg)
 			continue;
 
 		if (FLT_OPS(filter)->http_end) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->http_end(s, filter, msg);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->http_end(s, filter, msg));
 			if (ret <= 0) {
 				resume_filter_list_break(s, msg->chn, filter, ret);
 				goto end;
@@ -675,9 +860,11 @@ flt_http_reset(struct stream *s, struct http_msg *msg)
 	for (filter = flt_list_start(s, msg->chn); filter;
 	     filter = flt_list_next(s, msg->chn, filter)) {
 		if (FLT_OPS(filter)->http_reset) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			FLT_OPS(filter)->http_reset(s, filter, msg);
+			EXEC_CTX_NO_RET(exec_ctx, FLT_OPS(filter)->http_reset(s, filter, msg));
 		}
 	}
 	DBG_TRACE_LEAVE(STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
@@ -695,9 +882,11 @@ flt_http_reply(struct stream *s, short status, const struct buffer *msg)
 	DBG_TRACE_ENTER(STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s, s->txn, msg);
 	list_for_each_entry(filter, &strm_flt(s)->filters, list) {
 		if (FLT_OPS(filter)->http_reply) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			FLT_OPS(filter)->http_reply(s, filter, status, msg);
+			EXEC_CTX_NO_RET(exec_ctx, FLT_OPS(filter)->http_reply(s, filter, status, msg));
 		}
 	}
 	DBG_TRACE_LEAVE(STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
@@ -726,6 +915,7 @@ flt_http_payload(struct stream *s, struct http_msg *msg, unsigned int len)
 	DBG_TRACE_ENTER(STRM_EV_STRM_ANA|STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s, s->txn, msg);
 	for (filter = flt_list_start(s, msg->chn); filter;
 	     filter = flt_list_next(s, msg->chn, filter)) {
+		struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
 		unsigned long long *flt_off = &FLT_OFF(filter, msg->chn);
 		unsigned int offset = *flt_off - *strm_off;
 
@@ -739,10 +929,9 @@ flt_http_payload(struct stream *s, struct http_msg *msg, unsigned int len)
 
 		DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
 		filter->calls++;
-		ret = FLT_OPS(filter)->http_payload(s, filter, msg, out + offset, data - offset);
+		ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->http_payload(s, filter, msg, out + offset, data - offset));
 		if (ret < 0) {
-			s->last_entity.type = STRM_ENTITY_FILTER;
-			s->last_entity.ptr = filter;
+			resume_filter_list_break(s, msg->chn, filter, ret);
 			goto end;
 		}
 		data = ret + *flt_off - *strm_off;
@@ -810,9 +999,11 @@ flt_start_analyze(struct stream *s, struct channel *chn, unsigned int an_bit)
 
 		FLT_OFF(filter, chn) = 0;
 		if (FLT_OPS(filter)->channel_start_analyze) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->channel_start_analyze(s, filter, chn);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->channel_start_analyze(s, filter, chn));
 			if (ret <= 0) {
 				resume_filter_list_break(s, chn, filter, ret);
 				goto end;
@@ -847,9 +1038,11 @@ flt_pre_analyze(struct stream *s, struct channel *chn, unsigned int an_bit)
 	for (filter = resume_filter_list_start(s, chn); filter;
 	     filter = resume_filter_list_next(s, chn, filter)) {
 		if (FLT_OPS(filter)->channel_pre_analyze && (filter->pre_analyzers & an_bit)) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->channel_pre_analyze(s, filter, chn, an_bit);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->channel_pre_analyze(s, filter, chn, an_bit));
 			if (ret <= 0) {
 				resume_filter_list_break(s, chn, filter, ret);
 				goto check_result;
@@ -884,12 +1077,13 @@ flt_post_analyze(struct stream *s, struct channel *chn, unsigned int an_bit)
 	for (filter = flt_list_start(s, chn); filter;
 	     filter = flt_list_next(s, chn, filter)) {
 		if (FLT_OPS(filter)->channel_post_analyze &&  (filter->post_analyzers & an_bit)) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->channel_post_analyze(s, filter, chn, an_bit);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->channel_post_analyze(s, filter, chn, an_bit));
 			if (ret < 0) {
-				s->last_entity.type = STRM_ENTITY_FILTER;
-				s->last_entity.ptr = filter;
+				resume_filter_list_break(s, chn, filter, ret);
 				break;
 			}
 			filter->post_analyzers &= ~an_bit;
@@ -918,9 +1112,11 @@ flt_analyze_http_headers(struct stream *s, struct channel *chn, unsigned int an_
 	for (filter = resume_filter_list_start(s, chn); filter;
 	     filter = resume_filter_list_next(s, chn, filter)) {
 		if (FLT_OPS(filter)->http_headers) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_HTTP_ANA|STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->http_headers(s, filter, msg);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->http_headers(s, filter, msg));
 			if (ret <= 0) {
 				resume_filter_list_break(s, chn, filter, ret);
 				goto check_result;
@@ -969,9 +1165,11 @@ flt_end_analyze(struct stream *s, struct channel *chn, unsigned int an_bit)
 		unregister_data_filter(s, chn, filter);
 
 		if (FLT_OPS(filter)->channel_end_analyze) {
+			struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
+
 			DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_FLT_ANA, s);
 			filter->calls++;
-			ret = FLT_OPS(filter)->channel_end_analyze(s, filter, chn);
+			ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->channel_end_analyze(s, filter, chn));
 			if (ret <= 0) {
 				resume_filter_list_break(s, chn, filter, ret);
 				goto end;
@@ -1038,6 +1236,7 @@ flt_tcp_payload(struct stream *s, struct channel *chn, unsigned int len)
 	DBG_TRACE_ENTER(STRM_EV_TCP_ANA|STRM_EV_FLT_ANA, s);
 	for (filter = flt_list_start(s, chn); filter;
 	     filter = flt_list_next(s, chn, filter)) {
+		struct thread_exec_ctx exec_ctx = EXEC_CTX_MAKE(TH_EX_CTX_FLT, filter->config);
 		unsigned long long *flt_off = &FLT_OFF(filter, chn);
 		unsigned int offset = *flt_off - *strm_off;
 
@@ -1051,10 +1250,9 @@ flt_tcp_payload(struct stream *s, struct channel *chn, unsigned int len)
 
 		DBG_TRACE_DEVEL(FLT_ID(filter), STRM_EV_TCP_ANA|STRM_EV_FLT_ANA, s);
 		filter->calls++;
-		ret = FLT_OPS(filter)->tcp_payload(s, filter, chn, out + offset, data - offset);
+		ret = EXEC_CTX_WITH_RET(exec_ctx, FLT_OPS(filter)->tcp_payload(s, filter, chn, out + offset, data - offset));
 		if (ret < 0) {
-			s->last_entity.type = STRM_ENTITY_FILTER;
-			s->last_entity.ptr = filter;
+			resume_filter_list_break(s, chn, filter, ret);
 			goto end;
 		}
 		data = ret + *flt_off - *strm_off;
@@ -1197,6 +1395,7 @@ handle_analyzer_result(struct stream *s, struct channel *chn,
  * not enabled. */
 static struct cfg_kw_list cfg_kws = {ILH, {
 		{ CFG_LISTEN, "filter", parse_filter },
+		{ CFG_LISTEN, "filter-sequence", parse_filter_sequence },
 		{ 0, NULL, NULL },
 	}
 };

@@ -36,6 +36,7 @@
 #include <haproxy/stats.h>
 #include <haproxy/stconn.h>
 #include <haproxy/stream.h>
+#include <haproxy/stress.h>
 #include <haproxy/task.h>
 #include <haproxy/tools.h>
 #include <haproxy/version.h>
@@ -82,6 +83,7 @@ struct promex_ctx {
 	unsigned field_num;        /* current field number (ST_I_PX_* etc) */
 	unsigned mod_field_num;    /* first field number of the current module (ST_I_PX_* etc) */
 	int obj_state;             /* current state among PROMEX_{FRONT|BACK|SRV|LI}_STATE_* */
+	struct watcher px_watch;   /* watcher to automatically update next pointer */
 	struct watcher srv_watch;  /* watcher to automatically update next pointer */
 	struct list modules;       /* list of promex modules to export */
 	struct eb_root filters;    /* list of filters to apply on metrics name */
@@ -346,6 +348,10 @@ static int promex_dump_ts(struct appctx *appctx, struct ist prefix,
 	/* Fill the metric name */
 	istcat(&n, prefix, PROMEX_MAX_NAME_LEN);
 	istcat(&n, name, PROMEX_MAX_NAME_LEN);
+
+	/* In stress mode, force yielding on each metric. */
+	if (STRESS_RUN1(istlen(*out), 0))
+		goto full;
 
 	if ((ctx->flags & PROMEX_FL_METRIC_HDR) &&
 	    !promex_dump_ts_header(n, desc, type, out, max))
@@ -626,8 +632,6 @@ static int promex_dump_front_metrics(struct appctx *appctx, struct htx *htx)
 	}
 
 	list_for_each_entry_from(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
-		void *counters;
-
 		if (!(stats_px_get_cap(mod->domain_flags) & STATS_PX_CAP_FE))
 			continue;
 
@@ -664,8 +668,7 @@ static int promex_dump_front_metrics(struct appctx *appctx, struct htx *htx)
 				if ((px->flags & PR_FL_DISABLED) || px->uuid <= 0 || !(px->cap & PR_CAP_FE))
 					goto next_px2;
 
-				counters = EXTRA_COUNTERS_GET(px->extra_counters_fe, mod);
-				if (!mod->fill_stats(counters, stats + ctx->field_num, &ctx->mod_field_num))
+				if (!mod->fill_stats(mod, px->extra_counters_fe, stats + ctx->field_num, &ctx->mod_field_num))
 					return -1;
 
 				val = stats[ctx->field_num + ctx->mod_field_num];
@@ -817,8 +820,6 @@ static int promex_dump_listener_metrics(struct appctx *appctx, struct htx *htx)
 	}
 
 	list_for_each_entry_from(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
-		void *counters;
-
 		if (!(stats_px_get_cap(mod->domain_flags) & STATS_PX_CAP_LI))
 			continue;
 
@@ -864,8 +865,7 @@ static int promex_dump_listener_metrics(struct appctx *appctx, struct htx *htx)
 					labels[lb_idx+1].name  = ist("mod");
 					labels[lb_idx+1].value = ist2(mod->name, strlen(mod->name));
 
-					counters = EXTRA_COUNTERS_GET(li->extra_counters, mod);
-					if (!mod->fill_stats(counters, stats + ctx->field_num, &ctx->mod_field_num))
+					if (!mod->fill_stats(mod, li->extra_counters, stats + ctx->field_num, &ctx->mod_field_num))
 						return -1;
 
 					val = stats[ctx->field_num + ctx->mod_field_num];
@@ -940,9 +940,6 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 
 		if (promex_filter_metric(appctx, prefix, name))
 			continue;
-
-		if (!px)
-			px = proxies_list;
 
 		while (px) {
 			struct promex_label labels[PROMEX_MAX_LABELS-1] = {};
@@ -1098,9 +1095,16 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 					    &val, labels, &out, max))
 				goto full;
 		  next_px:
-			px = px->next;
+			px = watcher_next(&ctx->px_watch, px->next);
 		}
+		watcher_detach(&ctx->px_watch);
 		ctx->flags |= PROMEX_FL_METRIC_HDR;
+
+		/* Prepare a new iteration for the next stat column.
+		 * Update ctx.p[0] via watcher.
+		 */
+		watcher_attach(&ctx->px_watch, proxies_list);
+		px = proxies_list;
 	}
 
 	/* Skip extra counters */
@@ -1113,8 +1117,6 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 	}
 
 	list_for_each_entry_from(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
-		void *counters;
-
 		if (!(stats_px_get_cap(mod->domain_flags) & STATS_PX_CAP_BE))
 			continue;
 
@@ -1124,9 +1126,6 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 
 			if (promex_filter_metric(appctx, prefix, name))
 				continue;
-
-			if (!px)
-				px = proxies_list;
 
 			while (px) {
 				struct promex_label labels[PROMEX_MAX_LABELS-1] = {};
@@ -1151,8 +1150,7 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 				if ((px->flags & PR_FL_DISABLED) || px->uuid <= 0 || !(px->cap & PR_CAP_BE))
 					goto next_px2;
 
-				counters = EXTRA_COUNTERS_GET(px->extra_counters_be, mod);
-				if (!mod->fill_stats(counters, stats + ctx->field_num, &ctx->mod_field_num))
+				if (!mod->fill_stats(mod, px->extra_counters_be, stats + ctx->field_num, &ctx->mod_field_num))
 					return -1;
 
 				val = stats[ctx->field_num + ctx->mod_field_num];
@@ -1163,25 +1161,39 @@ static int promex_dump_back_metrics(struct appctx *appctx, struct htx *htx)
 					goto full;
 
 			next_px2:
-				px = px->next;
+				px = watcher_next(&ctx->px_watch, px->next);
 			}
+			watcher_detach(&ctx->px_watch);
 			ctx->flags |= PROMEX_FL_METRIC_HDR;
+
+			/* Prepare a new iteration for the next stat column.
+			 * Update ctx.p[0] via watcher.
+			 */
+			watcher_attach(&ctx->px_watch, proxies_list);
+			px = proxies_list;
 		}
 
 		ctx->field_num += mod->stats_count;
 		ctx->mod_field_num = 0;
 	}
 
-	px = NULL;
-	mod = NULL;
-
   end:
-	if (out.len) {
-		if (!htx_add_data_atonce(htx, out))
-			return -1; /* Unexpected and unrecoverable error */
+	if (ret) {
+		watcher_detach(&ctx->px_watch);
+		mod = NULL;
 	}
-	/* Save pointers (0=current proxy, 1=current stats module) of the current context */
-	ctx->p[0] = px;
+
+	if (out.len) {
+		if (!htx_add_data_atonce(htx, out)) {
+			watcher_detach(&ctx->px_watch);
+			return -1; /* Unexpected and unrecoverable error */
+		}
+	}
+
+	/* Save pointers of the current context for dump resumption :
+	 * 0=current proxy, 1=current stats module
+	 * Note that p[0] is already automatically updated via px_watch.
+	 */
 	ctx->p[1] = mod;
 	return ret;
   full:
@@ -1223,9 +1235,6 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 		if (promex_filter_metric(appctx, prefix, name))
 			continue;
 
-		if (!px)
-			px = proxies_list;
-
 		while (px) {
 			struct promex_label labels[PROMEX_MAX_LABELS-1] = {};
 			enum promex_mt_type type;
@@ -1244,11 +1253,6 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 			/* skip the disabled proxies, global frontend and non-networked ones */
 			if ((px->flags & PR_FL_DISABLED) || px->uuid <= 0 || !(px->cap & PR_CAP_BE))
 				goto next_px;
-
-			if (!sv) {
-				watcher_attach(&ctx->srv_watch, px->srv);
-				sv = px->srv;
-			}
 
 			while (sv) {
 				labels[lb_idx].name  = ist("server");
@@ -1405,9 +1409,25 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 
 		  next_px:
 			watcher_detach(&ctx->srv_watch);
-			px = px->next;
+			px = watcher_next(&ctx->px_watch, px->next);
+			if (px) {
+				/* Update ctx.p[1] via watcher. */
+				watcher_attach(&ctx->srv_watch, px->srv);
+				sv = ctx->p[1];
+			}
 		}
+		watcher_detach(&ctx->px_watch);
 		ctx->flags |= PROMEX_FL_METRIC_HDR;
+
+		/* Prepare a new iteration for the next stat column.
+		 * Update ctx.p[0]/p[1] via px_watch/srv_watch.
+		 */
+		watcher_attach(&ctx->px_watch, proxies_list);
+		px = proxies_list;
+		if (likely(px)) {
+			watcher_attach(&ctx->srv_watch, px->srv);
+			sv = ctx->p[1];
+		}
 	}
 
 	/* Skip extra counters */
@@ -1420,8 +1440,6 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 	}
 
 	list_for_each_entry_from(mod, &stats_module_list[STATS_DOMAIN_PROXY], list) {
-		void *counters;
-
 		if (!(stats_px_get_cap(mod->domain_flags) & STATS_PX_CAP_SRV))
 			continue;
 
@@ -1431,9 +1449,6 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 
 			if (promex_filter_metric(appctx, prefix, name))
 				continue;
-
-			if (!px)
-				px = proxies_list;
 
 			while (px) {
 				struct promex_label labels[PROMEX_MAX_LABELS-1] = {};
@@ -1455,11 +1470,6 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 				if ((px->flags & PR_FL_DISABLED) || px->uuid <= 0 || !(px->cap & PR_CAP_BE))
 					goto next_px2;
 
-				if (!sv) {
-					watcher_attach(&ctx->srv_watch, px->srv);
-					sv = px->srv;
-				}
-
 				while (sv) {
 					labels[lb_idx].name  = ist("server");
 					labels[lb_idx].value = ist2(sv->id, strlen(sv->id));
@@ -1471,8 +1481,7 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 						goto next_sv2;
 
 
-					counters = EXTRA_COUNTERS_GET(sv->extra_counters, mod);
-					if (!mod->fill_stats(counters, stats + ctx->field_num, &ctx->mod_field_num))
+					if (!mod->fill_stats(mod, sv->extra_counters, stats + ctx->field_num, &ctx->mod_field_num))
 						goto error;
 
 					val = stats[ctx->field_num + ctx->mod_field_num];
@@ -1488,28 +1497,47 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 
 			  next_px2:
 				watcher_detach(&ctx->srv_watch);
-				px = px->next;
+				px = watcher_next(&ctx->px_watch, px->next);
+				if (px) {
+					/* Update ctx.p[1] via watcher. */
+					watcher_attach(&ctx->srv_watch, px->srv);
+					sv = ctx->p[1];
+				}
 			}
+			watcher_detach(&ctx->px_watch);
 			ctx->flags |= PROMEX_FL_METRIC_HDR;
+
+			/* Prepare a new iteration for the next stat column.
+			 * Update ctx.p[0]/p[1] via px_watch/srv_watch.
+			 */
+			watcher_attach(&ctx->px_watch, proxies_list);
+			px = proxies_list;
+			if (likely(px)) {
+				watcher_attach(&ctx->srv_watch, px->srv);
+				sv = ctx->p[1];
+			}
 		}
 
 		ctx->field_num += mod->stats_count;
 		ctx->mod_field_num = 0;
 	}
 
-	px = NULL;
-	sv = NULL;
-	mod = NULL;
-
   end:
+	if (ret) {
+		watcher_detach(&ctx->px_watch);
+		watcher_detach(&ctx->srv_watch);
+		mod = NULL;
+	}
+
 	if (out.len) {
 		if (!htx_add_data_atonce(htx, out))
 			return -1; /* Unexpected and unrecoverable error */
 	}
 
-	/* Save pointers (0=current proxy, 1=current server, 2=current stats module) of the current context */
-	ctx->p[0] = px;
-	ctx->p[1] = sv;
+	/* Save pointers of the current context for dump resumption :
+	 * 0=current proxy, 1=current server, 2=current stats module
+	 * Note that p[0]/p[1] are already automatically updated via px_watch/srv_watch.
+	 */
 	ctx->p[2] = mod;
 	return ret;
   full:
@@ -1517,6 +1545,7 @@ static int promex_dump_srv_metrics(struct appctx *appctx, struct htx *htx)
 	goto end;
 
   error:
+	watcher_detach(&ctx->px_watch);
 	watcher_detach(&ctx->srv_watch);
 	return -1;
 }
@@ -1739,6 +1768,11 @@ static int promex_dump_metrics(struct appctx *appctx, struct htx *htx)
 			ctx->field_num = ST_I_PX_PXNAME;
 			ctx->mod_field_num = 0;
 			appctx->st1 = PROMEX_DUMPER_BACK;
+
+			if (ctx->flags & PROMEX_FL_SCOPE_BACK) {
+				/* Update ctx.p[0] via watcher. */
+				watcher_attach(&ctx->px_watch, proxies_list);
+			}
 			__fallthrough;
 
 		case PROMEX_DUMPER_BACK:
@@ -1756,6 +1790,15 @@ static int promex_dump_metrics(struct appctx *appctx, struct htx *htx)
 			ctx->field_num = ST_I_PX_PXNAME;
 			ctx->mod_field_num = 0;
 			appctx->st1 = PROMEX_DUMPER_SRV;
+
+			if (ctx->flags & PROMEX_FL_SCOPE_SERVER) {
+				/* Update ctx.p[0] via watcher. */
+				watcher_attach(&ctx->px_watch, proxies_list);
+				if (likely(proxies_list)) {
+					/* Update ctx.p[1] via watcher. */
+					watcher_attach(&ctx->srv_watch, proxies_list->srv);
+				}
+			}
 			__fallthrough;
 
 		case PROMEX_DUMPER_SRV:
@@ -2033,6 +2076,7 @@ static int promex_appctx_init(struct appctx *appctx)
 	LIST_INIT(&ctx->modules);
 	ctx->filters = EB_ROOT;
 	appctx->st0 = PROMEX_ST_INIT;
+	watcher_init(&ctx->px_watch,  &ctx->p[0], offsetof(struct proxy,  watcher_list));
 	watcher_init(&ctx->srv_watch, &ctx->p[1], offsetof(struct server, watcher_list));
 	return 0;
 }
@@ -2046,6 +2090,11 @@ static void promex_appctx_release(struct appctx *appctx)
 	struct promex_module_ref *ref, *back;
 	struct promex_metric_filter *flt;
         struct eb32_node *node, *next;
+
+	if (appctx->st1 == PROMEX_DUMPER_BACK ||
+	    appctx->st1 == PROMEX_DUMPER_SRV) {
+		watcher_detach(&ctx->px_watch);
+	}
 
 	if (appctx->st1 == PROMEX_DUMPER_SRV)
 		watcher_detach(&ctx->srv_watch);

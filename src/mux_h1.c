@@ -272,39 +272,45 @@ static struct h1_counters {
 #endif
 } h1_counters;
 
-static int h1_fill_stats(void *data, struct field *stats, unsigned int *selected_field)
+static int h1_fill_stats(struct stats_module *mod, struct extra_counters *ctr,
+                         struct field *stats, unsigned int *selected_field)
 {
-	struct h1_counters *counters = data;
 	unsigned int current_field = (selected_field != NULL ? *selected_field : 0);
 
 	for (; current_field < H1_STATS_COUNT; current_field++) {
 		struct field metric = { 0 };
+		struct h1_counters *counters;
+
+		if (!ctr)
+			goto store_metric;
+
+		counters = EXTRA_COUNTERS_BASE(ctr, mod);
 
 		switch (current_field) {
 		case H1_ST_OPEN_CONN:
-			metric = mkf_u64(FN_GAUGE,   counters->open_conns);
+			metric = mkf_u64(FN_GAUGE,   EXTRA_COUNTERS_AGGR(ctr, counters->open_conns));
 			break;
 		case H1_ST_OPEN_STREAM:
-			metric = mkf_u64(FN_GAUGE,   counters->open_streams);
+			metric = mkf_u64(FN_GAUGE,   EXTRA_COUNTERS_AGGR(ctr, counters->open_streams));
 			break;
 		case H1_ST_TOTAL_CONN:
-			metric = mkf_u64(FN_COUNTER, counters->total_conns);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->total_conns));
 			break;
 		case H1_ST_TOTAL_STREAM:
-			metric = mkf_u64(FN_COUNTER, counters->total_streams);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->total_streams));
 			break;
 		case H1_ST_BYTES_IN:
-			metric = mkf_u64(FN_COUNTER, counters->bytes_in);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->bytes_in));
 			break;
 		case H1_ST_BYTES_OUT:
-			metric = mkf_u64(FN_COUNTER, counters->bytes_out);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->bytes_out));
 			break;
 #if defined(USE_LINUX_SPLICE)
 		case H1_ST_SPLICED_BYTES_IN:
-			metric = mkf_u64(FN_COUNTER, counters->spliced_bytes_in);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->spliced_bytes_in));
 			break;
 		case H1_ST_SPLICED_BYTES_OUT:
-			metric = mkf_u64(FN_COUNTER, counters->spliced_bytes_out);
+			metric = mkf_u64(FN_COUNTER, EXTRA_COUNTERS_AGGR(ctr, counters->spliced_bytes_out));
 			break;
 #endif
 		default:
@@ -315,6 +321,7 @@ static int h1_fill_stats(void *data, struct field *stats, unsigned int *selected
 				return 0;
 			continue;
 		}
+	store_metric:
 		stats[current_field] = metric;
 		if (selected_field != NULL)
 			break;
@@ -1190,7 +1197,7 @@ static int h1s_finish_detach(struct h1s *h1s)
 			if (!session_add_conn(sess, h1c->conn)) {
 				/* HTTP/1.1 conn is always idle after detach, can be removed if session insert failed. */
 				h1c->conn->owner = NULL;
-				h1c->conn->mux->destroy(h1c);
+				CALL_MUX_NO_RET(h1c->conn->mux, destroy(h1c));
 				goto released;
 			}
 
@@ -1206,7 +1213,7 @@ static int h1s_finish_detach(struct h1s *h1s)
 			/* Ensure session can keep a new idle connection. */
 			if (session_check_idle_conn(sess, h1c->conn)) {
 				TRACE_DEVEL("outgoing connection rejected", H1_EV_STRM_END|H1_EV_H1C_END, h1c->conn);
-				h1c->conn->mux->destroy(h1c);
+				CALL_MUX_NO_RET(h1c->conn->mux, destroy(h1c));
 				goto released;
 			}
 
@@ -1229,7 +1236,7 @@ static int h1s_finish_detach(struct h1s *h1s)
 
 			if (!srv_add_to_idle_list(objt_server(h1c->conn->target), h1c->conn, is_not_first)) {
 				/* The server doesn't want it, let's kill the connection right away */
-				h1c->conn->mux->destroy(h1c);
+				CALL_MUX_NO_RET(h1c->conn->mux, destroy(h1c));
 				TRACE_DEVEL("outgoing connection killed", H1_EV_STRM_END|H1_EV_H1C_END);
 				goto released;
 			}
@@ -3709,7 +3716,7 @@ static void h1_wake_stream_for_recv(struct h1s *h1s)
 {
 	if (h1s && h1s->subs && h1s->subs->events & SUB_RETRY_RECV) {
 		TRACE_POINT(H1_EV_STRM_WAKE, h1s->h1c->conn, h1s);
-		tasklet_wakeup(h1s->subs->tasklet);
+		tasklet_wakeup(h1s->subs->tasklet, TASK_WOKEN_IO);
 		h1s->subs->events &= ~SUB_RETRY_RECV;
 		if (!h1s->subs->events)
 			h1s->subs = NULL;
@@ -3719,28 +3726,31 @@ static void h1_wake_stream_for_send(struct h1s *h1s)
 {
 	if (h1s && h1s->subs && h1s->subs->events & SUB_RETRY_SEND) {
 		TRACE_POINT(H1_EV_STRM_WAKE, h1s->h1c->conn, h1s);
-		tasklet_wakeup(h1s->subs->tasklet);
+		tasklet_wakeup(h1s->subs->tasklet, TASK_WOKEN_IO);
 		h1s->subs->events &= ~SUB_RETRY_SEND;
 		if (!h1s->subs->events)
 			h1s->subs = NULL;
 	}
 }
 
-/* alerts the data layer following this sequence :
- *   - if the h1s' data layer is subscribed to recv, then it's woken up for recv
- *   - if its subscribed to send, then it's woken up for send
- *   - if it was subscribed to neither, its ->wake() callback is called
+/* Alerts the data layer by waking it up. TASK_WOKEN_MSG state is used by
+ * default and if the data layer is also subscribed to recv or send,
+ * TASK_WOKEN_IO is added.
  */
 static void h1_alert(struct h1s *h1s)
 {
+	unsigned int state = TASK_WOKEN_MSG;
+
+	TRACE_POINT(H1_EV_STRM_WAKE, h1s->h1c->conn, h1s);
+	if (!h1s_sc(h1s))
+		return;
+
 	if (h1s->subs) {
-		h1_wake_stream_for_recv(h1s);
-		h1_wake_stream_for_send(h1s);
+		h1s->subs->events = 0;
+		h1s->subs = NULL;
+		state |= TASK_WOKEN_IO;
 	}
-	else if (h1s_sc(h1s) && h1s_sc(h1s)->app_ops->wake != NULL) {
-		TRACE_POINT(H1_EV_STRM_WAKE, h1s->h1c->conn, h1s);
-		h1s_sc(h1s)->app_ops->wake(h1s_sc(h1s));
-	}
+	tasklet_wakeup(h1s_sc(h1s)->wait_event.tasklet, state);
 }
 
 /* Try to send an HTTP error with h1c->errcode status code. It returns 1 on success
@@ -4662,6 +4672,7 @@ static void h1_detach(struct sedesc *sd)
 
 	if (h1c->state == H1_CS_RUNNING && !(h1c->flags & H1C_F_IS_BACK) && h1s->req.state != H1_MSG_DONE) {
 		h1c->state = H1_CS_DRAINING;
+		h1c->flags &= ~H1C_F_WANT_FASTFWD;
 		h1c_report_term_evt(h1c, muxc_tevt_type_graceful_shut);
 		COUNT_IF(1, "Deferring H1S destroy to drain message");
 		TRACE_DEVEL("Deferring H1S destroy to drain message", H1_EV_STRM_END, h1s->h1c->conn, h1s);
@@ -4875,8 +4886,14 @@ static size_t h1_snd_buf(struct stconn *sc, struct buffer *buf, size_t count, in
 
 	/* Inherit some flags from the upper layer */
 	h1c->flags &= ~(H1C_F_CO_MSG_MORE|H1C_F_CO_STREAMER);
-	if (flags & CO_SFL_MSG_MORE)
-		h1c->flags |= H1C_F_CO_MSG_MORE;
+	if (flags & CO_SFL_MSG_MORE) {
+		/* Don't set H1C_F_CO_MSG_MORE when sending a bodyless response to client.
+		 * We must do that if the response is not finished, regardless it a bodyless
+		 * response, to be sure to send it ASAP.
+		 */
+		if ((h1c->flags & H1C_F_IS_BACK) || !(h1s->flags & H1S_F_BODYLESS_RESP))
+			h1c->flags |= H1C_F_CO_MSG_MORE;
+	}
 	if (flags & CO_SFL_STREAMER)
 		h1c->flags |= H1C_F_CO_STREAMER;
 

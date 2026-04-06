@@ -38,7 +38,6 @@
 #include <haproxy/obj_type-t.h>
 #include <haproxy/queue-t.h>
 #include <haproxy/server-t.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/tcpcheck-t.h>
 #include <haproxy/thread-t.h>
 #include <haproxy/tools-t.h>
@@ -118,10 +117,9 @@ enum PR_SRV_STATE_FILE {
 #define PR_O_HTTP_DROP_REQ_TRLS 0x04000000 /* Drop the request trailers when forwarding to the server */
 #define PR_O_HTTP_DROP_RES_TRLS 0x08000000 /* Drop response trailers when forwarding to the client */
 
-#define PR_O_TCPCHK_SSL 0x10000000      /* at least one TCPCHECK connect rule requires SSL */
+/* unused: 0x10000000 */
 #define PR_O_CONTSTATS  0x20000000      /* continuous counters */
-#define PR_O_DISABLE404 0x40000000      /* Disable a server on a 404 response to a health-check */
-/* unused: 0x80000000 */
+/* unused: 0x40000000..0x80000000 */
 
 /* bits for proxy->options2 */
 #define PR_O2_SPLIC_REQ	0x00000001      /* transfer requests using linux kernel's splice() */
@@ -146,7 +144,7 @@ enum PR_SRV_STATE_FILE {
 
 #define PR_O2_NODELAY   0x00020000      /* fully interactive mode, never delay outgoing data */
 #define PR_O2_USE_PXHDR 0x00040000      /* use Proxy-Connection for proxy requests */
-#define PR_O2_CHK_SNDST 0x00080000      /* send the state of each server along with HTTP health checks */
+/* unused: 0x00080000 */
 
 #define PR_O2_SRC_ADDR	0x00100000	/* get the source ip and port for logs */
 
@@ -157,14 +155,17 @@ enum PR_SRV_STATE_FILE {
 #define PR_O2_RSTRICT_REQ_HDR_NAMES_NOOP 0x01000000 /* preserve request header names containing chars outside of [0-9a-zA-Z-] charset */
 #define PR_O2_RSTRICT_REQ_HDR_NAMES_MASK 0x01c00000 /* mask for restrict-http-header-names option */
 
-/* unused : 0x02000000 ... 0x08000000 */
-
 /* server health checks */
-#define PR_O2_CHK_NONE  0x00000000      /* no L7 health checks configured (TCP by default) */
-#define PR_O2_TCPCHK_CHK 0x90000000     /* use TCPCHK check for server health */
-#define PR_O2_EXT_CHK   0xA0000000      /* use external command for server health */
-/* unused: 0xB0000000 to 0xF000000, reserved for health checks */
-#define PR_O2_CHK_ANY   0xF0000000      /* Mask to cover any check */
+#define PR_O2_CHK_NONE   0x00000000    /* no L7 health checks configured (TCP by default) */
+#define PR_O2_TCPCHK_CHK 0x02000000    /* use TCPCHK check for server health */
+#define PR_O2_EXT_CHK    0x04000000    /* use external command for server health */
+#define PR_O2_CHK_ANY    0x06000000    /* Mask to cover any check */
+
+#define PR_O2_USE_SBUF_QUEUE    0x08000000 /* use small buffer for request when stream are queued*/
+#define PR_O2_USE_SBUF_L7_RETRY 0x10000000 /* use small buffer for request when L7 retires are enabled */
+#define PR_O2_USE_SBUF_CHECK    0x20000000 /* use small buffer for request's healthchecks */
+#define PR_O2_USE_SBUF_ALL      0x38000000 /* all flags for use-large-buffer option */
+/* unused : 0x40000000 ... 0x80000000 */
 /* end of proxy->options2 */
 
 /* bits for proxy->options3 */
@@ -240,14 +241,16 @@ enum PR_SRV_STATE_FILE {
 #define PR_RE_JUNK_REQUEST        0x00020000 /* We received an incomplete or garbage response */
 
 /* Proxy flags */
-#define PR_FL_DISABLED           0x01  /* The proxy was disabled in the configuration (not at runtime) */
-#define PR_FL_STOPPED            0x02  /* The proxy was stopped */
-#define PR_FL_DEF_EXPLICIT_MODE  0x04  /* Proxy mode is explicitely defined - only used for defaults instance */
-#define PR_FL_EXPLICIT_REF       0x08  /* The default proxy is explicitly referenced by another proxy */
-#define PR_FL_IMPLICIT_REF       0x10  /* The default proxy is implicitly referenced by another proxy */
-#define PR_FL_PAUSED             0x20  /* The proxy was paused at run time (reversible) */
-#define PR_FL_CHECKED            0x40  /* The proxy configuration was fully checked (including postparsing checks) */
-#define PR_FL_BE_UNPUBLISHED     0x80  /* The proxy cannot be targetted by content switching rules */
+#define PR_FL_DISABLED           0x00000001  /* The proxy was disabled in the configuration (not at runtime) */
+#define PR_FL_STOPPED            0x00000002  /* The proxy was stopped */
+#define PR_FL_DEF_EXPLICIT_MODE  0x00000004  /* Proxy mode is explicitly defined - only used for defaults instance */
+#define PR_FL_EXPLICIT_REF       0x00000008  /* The default proxy is explicitly referenced by another proxy */
+#define PR_FL_IMPLICIT_REF       0x00000010  /* The default proxy is implicitly referenced by another proxy */
+#define PR_FL_PAUSED             0x00000020  /* The proxy was paused at run time (reversible) */
+#define PR_FL_CHECKED            0x00000040  /* The proxy configuration was fully checked (including postparsing checks) */
+#define PR_FL_BE_UNPUBLISHED     0x00000080  /* The proxy cannot be targeted by content switching rules */
+#define PR_FL_DELETED            0x00000100  /* Proxy has been deleted and must be manipulated with care */
+#define PR_FL_NON_PURGEABLE      0x00000200  /* Proxy referenced by config elements which prevent its runtime removal. */
 
 struct stream;
 
@@ -306,13 +309,16 @@ struct error_snapshot {
 struct proxy_per_tgroup {
 	struct queue queue;
 	struct lbprm_per_tgrp lbprm;
+	char *extra_counters_fe_storage;        /* storage for extra_counters_fe */
+	char *extra_counters_be_storage;        /* storage for extra_counters_be */
 } THREAD_ALIGNED();
 
 struct proxy {
 	enum obj_type obj_type;                 /* object type == OBJ_TYPE_PROXY */
-	char flags;                             /* bit field PR_FL_* */
 	enum pr_mode mode;                      /* mode = PR_MODE_TCP, PR_MODE_HTTP, ... */
 	char cap;                               /* supported capabilities (PR_CAP_*) */
+	/* 1 byte hole */
+	unsigned int flags;                     /* bit field PR_FL_* */
 	int to_log;				/* things to be logged (LW_*), special value LW_LOGSTEPS == follow log-steps */
 	unsigned long last_change;              /* internal use only: last time the proxy state was changed */
 
@@ -438,7 +444,7 @@ struct proxy {
 	struct stktable *table;			/* table for storing sticking streams */
 
 	struct task *task;			/* the associated task, mandatory to manage rate limiting, stopping and resource shortage, NULL if disabled */
-	struct tcpcheck_rules tcpcheck_rules;   /* tcp-check send / expect rules */
+	struct tcpcheck tcpcheck;               /* tcp-check to use to perform a health-check */
 	char *check_command;			/* Command to use for external agent checks */
 	char *check_path;			/* PATH environment to use for external agent checks */
 	struct http_reply *replies[HTTP_ERR_SIZE]; /* HTTP replies for known errors */
@@ -476,7 +482,7 @@ struct proxy {
 		struct log_steps log_steps;     /* bitfield of log origins where log should be generated during request handling */
 		const char *file_prev;          /* file of the previous instance found with the same name, or NULL */
 		int line_prev;                  /* line of the previous instance found with the same name, or 0 */
-		unsigned int refcount;          /* refcount on this proxy (only used for default proxy for now) */
+		unsigned int def_ref;           /* default proxy only refcount */
 	} conf;					/* config information */
 	struct http_ext *http_ext;	        /* http ext options */
 	struct ceb_root *used_server_addr;      /* list of server addresses in use */
@@ -503,8 +509,16 @@ struct proxy {
 						 * name is used
 						 */
 	struct list filter_configs;		/* list of the filters that are declared on this proxy */
+	struct {                                /* sequence in which declared filters on the proxy should be execute
+	                                         * (list of filter_sequence_elt)
+						 */
+		struct list req;                /* during request handling */
+		struct list res;                /* during response handling */
+	} filter_sequence;
 
 	struct guid_node guid;			/* GUID global tree node */
+	struct mt_list watcher_list;		/* list of elems which currently references this proxy instance (currently only used with backends) */
+	uint refcount;				/* refcount to keep proxy from being deleted during runtime */
 
 	EXTRA_COUNTERS(extra_counters_fe);
 	EXTRA_COUNTERS(extra_counters_be);

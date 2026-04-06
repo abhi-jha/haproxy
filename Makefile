@@ -643,7 +643,7 @@ ifneq ($(USE_OPENSSL:0=),)
   OPTIONS_OBJS += src/ssl_sock.o src/ssl_ckch.o src/ssl_ocsp.o src/ssl_crtlist.o       \
                   src/ssl_sample.o src/cfgparse-ssl.o src/ssl_gencert.o                \
                   src/ssl_utils.o src/jwt.o src/ssl_clienthello.o src/jws.o src/acme.o \
-                  src/ssl_trace.o src/jwe.o
+                  src/acme_resolvers.o src/ssl_trace.o src/jwe.o
 endif
 
 ifneq ($(USE_ENGINE:0=),)
@@ -670,7 +670,7 @@ OPTIONS_OBJS += src/mux_quic.o src/h3.o src/quic_rx.o src/quic_tx.o	\
                 src/quic_cc_nocc.o src/quic_cc.o src/quic_pacing.o	\
                 src/h3_stats.o src/quic_stats.o src/qpack-enc.o		\
                 src/qpack-tbl.o src/quic_cc_drs.o src/quic_fctl.o	\
-                src/quic_enc.o
+                src/quic_enc.o src/mux_quic_qstrm.o src/xprt_qstrm.o
 endif
 
 ifneq ($(USE_QUIC_OPENSSL_COMPAT:0=),)
@@ -1043,7 +1043,7 @@ IGNORE_OPTS=help install install-man install-doc install-bin \
 	uninstall clean tags cscope tar git-tar version update-version \
 	opts reg-tests reg-tests-help unit-tests admin/halog/halog dev/flags/flags \
 	dev/haring/haring dev/ncpu/ncpu dev/poll/poll dev/tcploop/tcploop \
-	dev/term_events/term_events dev/gdb/pm-from-core
+	dev/term_events/term_events dev/gdb/pm-from-core dev/gdb/libs-from-core
 
 ifneq ($(TARGET),)
 ifeq ($(filter $(firstword $(MAKECMDGOALS)),$(IGNORE_OPTS)),)
@@ -1075,6 +1075,9 @@ admin/dyncookie/dyncookie: admin/dyncookie/dyncookie.o
 	$(cmd_LD) $(ARCH_FLAGS) $(LDFLAGS) -o $@ $^ $(LDOPTS)
 
 dev/flags/flags: dev/flags/flags.o
+	$(cmd_LD) $(ARCH_FLAGS) $(LDFLAGS) -o $@ $^ $(LDOPTS)
+
+dev/gdb/libs-from-core: dev/gdb/libs-from-core.o
 	$(cmd_LD) $(ARCH_FLAGS) $(LDFLAGS) -o $@ $^ $(LDOPTS)
 
 dev/gdb/pm-from-core: dev/gdb/pm-from-core.o
@@ -1178,7 +1181,7 @@ distclean: clean
 	$(Q)rm -f admin/dyncookie/dyncookie
 	$(Q)rm -f dev/haring/haring dev/ncpu/ncpu{,.so} dev/poll/poll dev/tcploop/tcploop
 	$(Q)rm -f dev/hpack/decode dev/hpack/gen-enc dev/hpack/gen-rht
-	$(Q)rm -f dev/qpack/decode dev/gdb/pm-from-core
+	$(Q)rm -f dev/qpack/decode dev/gdb/pm-from-core dev/gdb/libs-from-core
 
 tags:
 	$(Q)find src include \( -name '*.c' -o -name '*.h' \) -print0 | \
@@ -1332,7 +1335,8 @@ range:
 			echo "[ $$index/$$count ]   $$commit #############################"; \
 			git checkout -q $$commit || die 1; \
 			$(MAKE) all || die 1; \
-			[ -z "$(TEST_CMD)" ] || $(TEST_CMD) || die 1; \
+			set -- $(TEST_CMD); \
+			[ "$$#" -eq 0 ] || "$$@" || die 1; \
 			index=$$((index + 1)); \
 		done; \
 		echo;echo "Done! $${count} commit(s) built successfully for RANGE $${RANGE}" ; \

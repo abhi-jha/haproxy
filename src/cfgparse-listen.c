@@ -31,7 +31,6 @@
 #include <haproxy/proxy.h>
 #include <haproxy/sample.h>
 #include <haproxy/server.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/stick_table.h>
 #include <haproxy/tcpcheck.h>
 #include <haproxy/tools.h>
@@ -394,7 +393,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			 * freed unless it is still referenced by proxies.
 			 */
 			if (last_defproxy && last_defproxy->id[0] == '\0' &&
-			    !last_defproxy->conf.refcount) {
+			    !last_defproxy->conf.def_ref) {
 				defaults_px_destroy(last_defproxy);
 			}
 			last_defproxy = NULL;
@@ -1359,14 +1358,15 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			goto out;
 		}
 
-		err_code |= warnif_misplaced_http_req(curproxy, file, linenum, args[0], NULL);
+		if (warnif_misplaced_http_req(curproxy, file, linenum, args[0], NULL))
+			err_code |= ERR_WARN;
 
 		if (curproxy->cap & PR_CAP_FE)
 			where |= SMP_VAL_FE_HRQ_HDR;
 		if (curproxy->cap & PR_CAP_BE)
 			where |= SMP_VAL_BE_HRQ_HDR;
 		err_code |= warnif_cond_conflicts(rule->cond, where, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		LIST_APPEND(&curproxy->http_req_rules, &rule->list);
@@ -1401,7 +1401,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		if (curproxy->cap & PR_CAP_BE)
 			where |= SMP_VAL_BE_HRS_HDR;
 		err_code |= warnif_cond_conflicts(rule->cond, where, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		LIST_APPEND(&curproxy->http_res_rules, &rule->list);
@@ -1435,7 +1435,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		if (curproxy->cap & PR_CAP_BE)
 			where |= SMP_VAL_BE_HRS_HDR;
 		err_code |= warnif_cond_conflicts(rule->cond, where, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		LIST_APPEND(&curproxy->http_after_res_rules, &rule->list);
@@ -1492,14 +1492,15 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		}
 
 		LIST_APPEND(&curproxy->redirect_rules, &rule->list);
-		err_code |= warnif_misplaced_redirect(curproxy, file, linenum, args[0], NULL);
+		if (warnif_misplaced_redirect(curproxy, file, linenum, args[0], NULL))
+			err_code |= ERR_WARN;
 
 		if (curproxy->cap & PR_CAP_FE)
 			where |= SMP_VAL_FE_HRQ_HDR;
 		if (curproxy->cap & PR_CAP_BE)
 			where |= SMP_VAL_BE_HRQ_HDR;
 		err_code |= warnif_cond_conflicts(rule->cond, where, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 	}
 	else if (strcmp(args[0], "use_backend") == 0) {
@@ -1529,7 +1530,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			}
 
 			err_code |= warnif_cond_conflicts(cond, SMP_VAL_FE_SET_BCK, &errmsg);
-			if (err_code)
+			if (errmsg && *errmsg)
 				ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 		}
 		else if (*args[2]) {
@@ -1592,7 +1593,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		}
 
 		err_code |= warnif_cond_conflicts(cond, SMP_VAL_BE_SET_SRV, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		rule = calloc(1, sizeof(*rule));
@@ -1647,7 +1648,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		 * where force-persist is applied.
 		 */
 		err_code |= warnif_cond_conflicts(cond, SMP_VAL_BE_REQ_CNT, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		rule = calloc(1, sizeof(*rule));
@@ -1815,7 +1816,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			err_code |= warnif_cond_conflicts(cond, SMP_VAL_BE_STO_RUL, &errmsg);
 		else
 			err_code |= warnif_cond_conflicts(cond, SMP_VAL_BE_SET_SRV, &errmsg);
-		if (err_code)
+		if (errmsg && *errmsg)
 			ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 		rule = calloc(1, sizeof(*rule));
@@ -1873,7 +1874,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			if (curproxy->cap & PR_CAP_BE)
 				where |= SMP_VAL_BE_HRQ_HDR;
 			err_code |= warnif_cond_conflicts(cond, where, &errmsg);
-			if (err_code)
+			if (errmsg && *errmsg)
 				ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 
 			rule = calloc(1, sizeof(*rule));
@@ -1953,7 +1954,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			if (curproxy->cap & PR_CAP_BE)
 				where |= SMP_VAL_BE_HRQ_HDR;
 			err_code |= warnif_cond_conflicts(rule->cond, where, &errmsg);
-			if (err_code)
+			if (errmsg && *errmsg)
 				ha_warning("parsing [%s:%d] : '%s.\n'", file, linenum, errmsg);
 			LIST_APPEND(&curproxy->uri_auth->http_req_rules, &rule->list);
 
@@ -1975,7 +1976,10 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			if (!stats_check_init_uri_auth(&curproxy->uri_auth))
 				goto alloc_error;
 		} else if (strcmp(args[1], "hide-version") == 0) {
-			if (!stats_set_flag(&curproxy->uri_auth, STAT_F_HIDEVER))
+			if (curproxy->uri_auth)
+				curproxy->uri_auth->flags &= ~STAT_F_SHOWVER;
+		} else if (strcmp(args[1], "show-version") == 0) {
+			if (!stats_set_flag(&curproxy->uri_auth, STAT_F_SHOWVER))
 				goto alloc_error;
 		} else if (strcmp(args[1], "show-legends") == 0) {
 			if (!stats_set_flag(&curproxy->uri_auth, STAT_F_SHLGNDS))
@@ -2042,7 +2046,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			}
 		} else {
 stats_error_parsing:
-			ha_alert("parsing [%s:%d]: %s '%s', expects 'admin', 'uri', 'realm', 'auth', 'scope', 'enable', 'hide-version', 'show-node', 'show-desc' or 'show-legends'.\n",
+			ha_alert("parsing [%s:%d]: %s '%s', expects 'admin', 'uri', 'realm', 'auth', 'scope', 'enable', 'hide-version', 'show-node', 'show-desc' , 'show-legends' or 'show-version'.\n",
 				 file, linenum, *args[1]?"unknown stats parameter":"missing keyword in", args[*args[1]?1:0]);
 			err_code |= ERR_ALERT | ERR_FATAL;
 			goto out;
@@ -2199,6 +2203,42 @@ stats_error_parsing:
 			ha_alert("parsing [%s:%d]: option '%s' is not supported any more since HAProxy 2.5. This option stopped working in HAProxy 1.9 and usually had nasty side effects. It can be more reliably implemented with combinations of 'http-request set-dst' and 'http-request set-uri', and even 'http-request do-resolve' if DNS resolution is desired.\n",
 				   file, linenum, args[1]);
 			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		else if (strcmp(args[1], "use-small-buffers") == 0) {
+			unsigned int flags = PR_O2_USE_SBUF_ALL;
+
+			if (warnifnotcap(curproxy, PR_CAP_BE, file, linenum, args[1], NULL)) {
+				err_code |= ERR_WARN;
+				goto out;
+			}
+
+			if (*(args[2])) {
+				int cur_arg;
+
+				flags = 0;
+				for (cur_arg = 2; *(args[cur_arg]); cur_arg++) {
+					if (strcmp(args[cur_arg], "queue") == 0)
+						flags |= PR_O2_USE_SBUF_QUEUE;
+					else if (strcmp(args[cur_arg], "l7-retries") == 0)
+						flags |= PR_O2_USE_SBUF_L7_RETRY;
+					else if (strcmp(args[cur_arg], "check") == 0)
+						flags |= PR_O2_USE_SBUF_CHECK;
+					else {
+						ha_alert("parsing [%s:%d] : invalid parameter '%s'. option '%s' expects 'queue', 'l7-retries' or 'check' value.\n",
+							 file, linenum, args[cur_arg], args[1]);
+						err_code |= ERR_ALERT | ERR_FATAL;
+						goto out;
+					}
+				}
+			}
+			if (kwm == KWM_STD) {
+				curproxy->options2 &= ~PR_O2_USE_SBUF_ALL;
+				curproxy->options2 |= flags;
+			}
+			else if (kwm == KWM_NO) {
+				curproxy->options2 &= ~flags;
+			}
 			goto out;
 		}
 
@@ -2558,7 +2598,8 @@ stats_error_parsing:
 				goto out;
 			}
 
-			err_code |= warnif_misplaced_monitor(curproxy, file, linenum, args[0], args[1]);
+			if (warnif_misplaced_monitor(curproxy, file, linenum, args[0], args[1]))
+				err_code |= ERR_WARN;
 			if ((cond = build_acl_cond(file, linenum, &curproxy->acl, curproxy, (const char **)args + 2, &errmsg)) == NULL) {
 				ha_alert("parsing [%s:%d] : error detected while parsing a '%s %s' condition : %s.\n",
 					 file, linenum, args[0], args[1], errmsg);

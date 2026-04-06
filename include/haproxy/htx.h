@@ -37,6 +37,7 @@ struct htx_blk *htx_add_blk(struct htx *htx, enum htx_blk_type type, uint32_t bl
 struct htx_blk *htx_remove_blk(struct htx *htx, struct htx_blk *blk);
 struct htx_ret htx_find_offset(struct htx *htx, uint32_t offset);
 void htx_truncate(struct htx *htx, uint32_t offset);
+void htx_truncate_blk(struct htx *htx, struct htx_blk *blk);
 struct htx_ret htx_drain(struct htx *htx, uint32_t max);
 
 struct htx_blk *htx_replace_blk_value(struct htx *htx, struct htx_blk *blk,
@@ -56,6 +57,16 @@ size_t htx_add_data(struct htx *htx, const struct ist data);
 struct htx_blk *htx_add_last_data(struct htx *htx, struct ist data);
 void htx_move_blk_before(struct htx *htx, struct htx_blk **blk, struct htx_blk **ref);
 int htx_append_msg(struct htx *dst, const struct htx *src);
+struct buffer *htx_move_to_small_buffer(struct buffer *dst, struct buffer *src);
+struct buffer *htx_move_to_large_buffer(struct buffer *dst, struct buffer *src);
+struct buffer *htx_copy_to_small_buffer(struct buffer *dst, struct buffer *src);
+struct buffer *htx_copy_to_large_buffer(struct buffer *dst, struct buffer *src);
+
+#define HTX_XFER_DEFAULT           0x00000000 /* Default XFER: no partial xfer / remove blocks from source */
+#define HTX_XFER_KEEP_SRC_BLKS     0x00000001 /* Don't remove xfer blocks from source messages during xfer */
+#define HTX_XFER_PARTIAL_HDRS_COPY 0x00000002 /* Allow partial copy of headers and trailers part */
+#define HTX_XFER_HDRS_ONLY         0x00000003 /* Only Transfer header blocks (start-line, header and EOH) */
+size_t htx_xfer(struct htx *dst, struct htx *src, size_t count, unsigned int flags);
 
 /* Functions and macros to get parts of the start-line or length of these
  * parts. Request and response start-lines are both composed of 3 parts.
@@ -96,6 +107,11 @@ static inline struct ist htx_sl_p2(const struct htx_sl *sl)
 static inline struct ist htx_sl_p3(const struct htx_sl *sl)
 {
 	return ist2(HTX_SL_P3_PTR(sl), HTX_SL_P3_LEN(sl));
+}
+
+static inline struct ist htx_sl_vsn(const struct htx_sl *sl)
+{
+	return ((sl->flags & HTX_SL_F_IS_RESP) ? htx_sl_p1(sl) : htx_sl_p3(sl));
 }
 
 static inline struct ist htx_sl_req_meth(const struct htx_sl *sl)

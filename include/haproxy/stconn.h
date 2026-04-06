@@ -45,8 +45,7 @@ void se_shutdown(struct sedesc *sedesc, enum se_shut_mode mode);
 
 struct stconn *sc_new_from_endp(struct sedesc *sedesc, struct session *sess, struct buffer *input);
 struct stconn *sc_new_from_strm(struct stream *strm, unsigned int flags);
-struct stconn *sc_new_from_check(struct check *check, unsigned int flags);
-struct stconn *sc_new_from_haterm(struct sedesc *sd, struct session *sess, struct buffer *input);
+struct stconn *sc_new_from_check(struct check *check);
 void sc_free(struct stconn *sc);
 
 int sc_attach_mux(struct stconn *sc, void *target, void *ctx);
@@ -57,6 +56,8 @@ void sc_destroy(struct stconn *sc);
 int sc_reset_endp(struct stconn *sc);
 
 struct appctx *sc_applet_create(struct stconn *sc, struct applet *app);
+int sc_applet_process(struct stconn *sc);
+int sc_conn_process(struct stconn *sc);
 
 void sc_conn_prepare_endp_upgrade(struct stconn *sc);
 void sc_conn_abort_endp_upgrade(struct stconn *sc);
@@ -349,16 +350,6 @@ static inline struct hstream *sc_hstream(const struct stconn *sc)
 	return NULL;
 }
 
-/* Returns the name of the application layer's name for the stconn,
- * or "NONE" when none is attached.
- */
-static inline const char *sc_get_data_name(const struct stconn *sc)
-{
-	if (!sc->app_ops)
-		return "NONE";
-	return sc->app_ops->name;
-}
-
 /* Returns non-zero if the stream connector's Rx path is blocked because of
  * lack of room in the input buffer. This usually happens after applets failed
  * to deliver data into the channel's buffer and reported it via sc_need_room().
@@ -460,7 +451,7 @@ static inline size_t se_nego_ff(struct sedesc *se, struct buffer *input, size_t 
 				goto end;
 			}
 
-			ret = mux->nego_fastfwd(se->sc, input, count, flags);
+			ret = CALL_MUX_WITH_RET(mux, nego_fastfwd(se->sc, input, count, flags));
 			if (se->iobuf.flags & IOBUF_FL_FF_BLOCKED) {
 				sc_ep_report_blocked_send(se->sc, 0);
 
@@ -493,7 +484,7 @@ static inline size_t se_done_ff(struct sedesc *se)
 		size_t to_send = se_ff_data(se);
 
 		BUG_ON(!mux->done_fastfwd);
-		ret = mux->done_fastfwd(se->sc);
+		ret = CALL_MUX_WITH_RET(mux, done_fastfwd(se->sc));
 		if (ret) {
 			/* Something was forwarded, unblock the zero-copy forwarding.
 			 * If all data was sent, report and send activity.
@@ -525,7 +516,7 @@ static inline size_t se_done_ff(struct sedesc *se)
 			}
 		}
 	}
-
+	se->sc->bytes_out += ret;
 	return ret;
 }
 

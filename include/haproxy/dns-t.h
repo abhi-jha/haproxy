@@ -24,12 +24,12 @@
 
 #include <import/ebtree-t.h>
 
-#include <haproxy/connection-t.h>
 #include <haproxy/buf-t.h>
+#include <haproxy/connection-t.h>
+#include <haproxy/counters-t.h>
 #include <haproxy/dgram-t.h>
 #include <haproxy/dns_ring-t.h>
 #include <haproxy/obj_type-t.h>
-#include <haproxy/stats-t.h>
 #include <haproxy/task-t.h>
 #include <haproxy/thread.h>
 
@@ -152,6 +152,7 @@ struct dns_nameserver {
 	struct dns_stream_server *stream; /* used for tcp dns */
 
 	EXTRA_COUNTERS(extra_counters);
+	char *extra_counters_storage;    /* storage used for extra_counters above */
 	struct dns_counters *counters;
 
 	struct list list;               /* nameserver chained list */

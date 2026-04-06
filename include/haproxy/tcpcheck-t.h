@@ -104,10 +104,15 @@ enum tcpcheck_rule_type {
 	TCPCHK_ACT_ACTION_KW, /* custom registered action_kw rule. */
 };
 
-#define TCPCHK_RULES_NONE           0x00000000
-#define TCPCHK_RULES_UNUSED_TCP_RS  0x00000001 /* An unused tcp-check ruleset exists */
-#define TCPCHK_RULES_UNUSED_HTTP_RS 0x00000002 /* An unused http-check ruleset exists */
-#define TCPCHK_RULES_UNUSED_RS      0x00000003 /* Mask for unused ruleset */
+#define TCPCHK_FL_NONE           0x00000000
+#define TCPCHK_FL_UNUSED_TCP_RS  0x00000001 /* An unused tcp-check ruleset exists for the current proxy */
+#define TCPCHK_FL_UNUSED_HTTP_RS 0x00000002 /* An unused http-check ruleset exists for the current proxy  */
+#define TCPCHK_FL_UNUSED_RS      0x00000003 /* Mask for unused ruleset */
+#define TCPCHK_FL_USE_SSL        0x00000004 /* tcp-check uses SSL connection */
+
+#define TCPCHK_RULES_NONE         0x00000000
+#define TCPCHK_RULES_DISABLE404   0x00000001 /* Disable a server on a 404 response wht HTTP health checks */
+#define TCPCHK_RULES_SNDST        0x00000002 /* send the state of each server along with HTTP health checks */
 
 #define TCPCHK_RULES_PGSQL_CHK   0x00000010
 #define TCPCHK_RULES_REDIS_CHK   0x00000020
@@ -121,6 +126,7 @@ enum tcpcheck_rule_type {
 /* Unused 0x000000A0..0x00000FF0 (reserved for future proto) */
 #define TCPCHK_RULES_TCP_CHK     0x00000FF0
 #define TCPCHK_RULES_PROTO_CHK   0x00000FF0 /* Mask to cover protocol check */
+#define TCPCHK_RULES_MAY_USE_SBUF 0x00001000 /* checks may try to use small buffers if possible for the request */
 
 struct check;
 struct tcpcheck_connect {
@@ -227,18 +233,24 @@ struct tcpcheck_var {
 	struct list list;        /* element to chain tcp-check vars */
 };
 
-/* a list of tcp-check rules */
-struct tcpcheck_rules {
-	unsigned int flags;       /* flags applied to the rules */
-	struct list *list;        /* the list of tcpcheck_rules */
-	struct list  preset_vars; /* The list of variable to preset before executing the ruleset */
-};
-
 /* A list of tcp-check rules with a name */
 struct tcpcheck_ruleset {
 	struct list rules;     /* the list of tcpcheck_rule */
+	unsigned int flags;    /* flags applied to the rules */
 	struct ebpt_node node; /* node in the shared tree */
+	struct {
+		struct list preset_vars;  /* The list of variable to preset for healthcheck sections */
+		unsigned int flags;       /* TCPCHECK_FL_* for healthcheck sections */
+		const char *file;         /* file where the section appears */
+		int line;                 /* line where the section appears */
+	} conf;                           /* config information */
 };
 
+struct tcpcheck {
+	struct tcpcheck_ruleset *rs; /* The tcp-check ruleset to use */
+	char *healthcheck;           /* name of the healthcheck section (NULL if not used) */
+	struct list preset_vars;     /* The list of variable to preset before executing the ruleset */
+	unsigned int flags;          /* TCPCHECK_FL_* */
+};
 
 #endif /* _HAPROXY_CHECKS_T_H */

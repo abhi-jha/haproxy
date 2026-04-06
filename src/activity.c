@@ -29,8 +29,11 @@ struct show_prof_ctx {
 	int dump_step;  /* 0,1,2,4,5,6; see cli_iohandler_show_profiling() */
 	int linenum;    /* next line to be dumped (starts at 0) */
 	int maxcnt;     /* max line count per step (0=not set)  */
-	int by_what;    /* 0=sort by usage, 1=sort by address, 2=sort by time */
+	int by_what;    /* 0=sort by usage, 1=sort by address, 2=sort by time, 3=sort by ctx */
 	int aggr;       /* 0=dump raw, 1=aggregate on callee    */
+	/* 4-byte hole here */
+	struct sched_activity *tmp_activity; /* dynamically allocated during dumps */
+	struct memprof_stats *tmp_memstats; /* dynamically allocated during dumps */
 };
 
 /* CLI context for the "show activity" command */
@@ -299,13 +302,18 @@ struct memprof_stats *memprof_get_bin(const void *ra, enum memprof_method meth)
 	int retries = 16; // up to 16 consecutive entries may be tested.
 	const void *old;
 	unsigned int bin;
+	ullong hash;
 
 	if (unlikely(!ra)) {
 		bin = MEMPROF_HASH_BUCKETS;
 		goto leave;
 	}
-	bin = ptr_hash(ra, MEMPROF_HASH_BITS);
-	for (; memprof_stats[bin].caller != ra; bin = (bin + 1) & (MEMPROF_HASH_BUCKETS - 1)) {
+	hash = _ptr2_hash_arg(ra, th_ctx->exec_ctx.pointer, th_ctx->exec_ctx.type);
+	for (bin = _ptr_hash_reduce(hash, MEMPROF_HASH_BITS);
+	     memprof_stats[bin].caller != ra ||
+	       memprof_stats[bin].exec_ctx.type != th_ctx->exec_ctx.type ||
+	       memprof_stats[bin].exec_ctx.pointer != th_ctx->exec_ctx.pointer;
+	     bin = (bin + (hash | 1)) & (MEMPROF_HASH_BUCKETS - 1)) {
 		if (!--retries) {
 			bin = MEMPROF_HASH_BUCKETS;
 			break;
@@ -314,6 +322,7 @@ struct memprof_stats *memprof_get_bin(const void *ra, enum memprof_method meth)
 		old = NULL;
 		if (!memprof_stats[bin].caller &&
 		    HA_ATOMIC_CAS(&memprof_stats[bin].caller, &old, ra)) {
+			memprof_stats[bin].exec_ctx = th_ctx->exec_ctx;
 			memprof_stats[bin].method = meth;
 			break;
 		}
@@ -918,6 +927,14 @@ static int cmp_memprof_stats(const void *a, const void *b)
 		return -1;
 	else if (l->alloc_tot + l->free_tot < r->alloc_tot + r->free_tot)
 		return 1;
+	else if (l->exec_ctx.type > r->exec_ctx.type)
+		return -1;
+	else if (l->exec_ctx.type < r->exec_ctx.type)
+		return 1;
+	else if (l->exec_ctx.pointer > r->exec_ctx.pointer)
+		return -1;
+	else if (l->exec_ctx.pointer < r->exec_ctx.pointer)
+		return 1;
 	else
 		return 0;
 }
@@ -928,6 +945,47 @@ static int cmp_memprof_addr(const void *a, const void *b)
 	const struct memprof_stats *r = (const struct memprof_stats *)b;
 
 	if (l->caller > r->caller)
+		return -1;
+	else if (l->caller < r->caller)
+		return 1;
+	else if (l->exec_ctx.type > r->exec_ctx.type)
+		return -1;
+	else if (l->exec_ctx.type < r->exec_ctx.type)
+		return 1;
+	else if (l->exec_ctx.pointer > r->exec_ctx.pointer)
+		return -1;
+	else if (l->exec_ctx.pointer < r->exec_ctx.pointer)
+		return 1;
+	else
+		return 0;
+}
+
+static int cmp_memprof_ctx(const void *a, const void *b)
+{
+	const struct memprof_stats *l = (const struct memprof_stats *)a;
+	const struct memprof_stats *r = (const struct memprof_stats *)b;
+	const void *ptrl = l->exec_ctx.pointer;
+	const void *ptrr = r->exec_ctx.pointer;
+
+	/* in case of a mux, we'll use the always-present ->subscribe()
+	 * function as a sorting key so that mux-ops and other mux functions
+	 * appear grouped together.
+	 */
+	if (l->exec_ctx.type == TH_EX_CTX_MUX)
+		ptrl = l->exec_ctx.mux_ops->subscribe;
+
+	if (r->exec_ctx.type == TH_EX_CTX_MUX)
+		ptrr = r->exec_ctx.mux_ops->subscribe;
+
+	if (ptrl > ptrr)
+		return -1;
+	else if (ptrl < ptrr)
+		return 1;
+	else if (l->exec_ctx.type > r->exec_ctx.type)
+		return -1;
+	else if (l->exec_ctx.type < r->exec_ctx.type)
+		return 1;
+	else if (l->caller > r->caller)
 		return -1;
 	else if (l->caller < r->caller)
 		return 1;
@@ -992,9 +1050,9 @@ struct sched_activity *sched_activity_entry(struct sched_activity *array, const 
 static int cli_io_handler_show_profiling(struct appctx *appctx)
 {
 	struct show_prof_ctx *ctx = appctx->svcctx;
-	struct sched_activity tmp_activity[SCHED_ACT_HASH_BUCKETS];
+	struct sched_activity *tmp_activity = ctx->tmp_activity;
 #ifdef USE_MEMORY_PROFILING
-	struct memprof_stats tmp_memstats[MEMPROF_HASH_BUCKETS + 1];
+	struct memprof_stats *tmp_memstats = ctx->tmp_memstats;
 	unsigned long long tot_alloc_calls, tot_free_calls;
 	unsigned long long tot_alloc_bytes, tot_free_bytes;
 #endif
@@ -1035,7 +1093,20 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 	if ((ctx->dump_step & 3) != 1)
 		goto skip_tasks;
 
-	memcpy(tmp_activity, sched_activity, sizeof(tmp_activity));
+	if (tmp_activity)
+		goto tasks_resume;
+
+	/* first call for show profiling tasks: we have to allocate a tmp
+	 * array for sorting and processing, and possibly perform some
+	 * sorting and aggregation.
+	 */
+	tmp_activity = ha_aligned_alloc(__alignof__(*tmp_activity), sizeof(sched_activity));
+	if (!tmp_activity)
+		goto end_tasks;
+
+	ctx->tmp_activity = tmp_activity;
+	memcpy(tmp_activity, sched_activity, sizeof(sched_activity));
+
 	/* for addr sort and for callee aggregation we have to first sort by address */
 	if (ctx->aggr || ctx->by_what == 1) // sort by addr
 		qsort(tmp_activity, SCHED_ACT_HASH_BUCKETS, sizeof(tmp_activity[0]), cmp_sched_activity_addr);	
@@ -1060,6 +1131,7 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 	else if (ctx->by_what == 2) // by cpu_tot
 		qsort(tmp_activity, SCHED_ACT_HASH_BUCKETS, sizeof(tmp_activity[0]), cmp_sched_activity_cpu);
 
+ tasks_resume:
 	if (!ctx->linenum)
 		chunk_appendf(&trash, "Tasks activity over %.3f sec till %.3f sec ago:\n"
 		                      "  function                      calls   cpu_tot   cpu_avg   lkw_avg   lkd_avg   mem_avg   lat_avg\n",
@@ -1123,6 +1195,8 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 		return 0;
 	}
 
+ end_tasks:
+	ha_free(&ctx->tmp_activity);
 	ctx->linenum = 0; // reset first line to dump
 	if ((ctx->dump_step & 4) == 0)
 		ctx->dump_step++; // next step
@@ -1133,16 +1207,57 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 	if ((ctx->dump_step & 3) != 2)
 		goto skip_mem;
 
-	memcpy(tmp_memstats, memprof_stats, sizeof(tmp_memstats));
-	if (ctx->by_what)
+	if (tmp_memstats)
+		goto memstats_resume;
+
+	/* first call for show profiling memory: we have to allocate a tmp
+	 * array for sorting and processing, and possibly perform some sorting
+	 * and aggregation.
+	 */
+	tmp_memstats = ha_aligned_alloc(__alignof__(*tmp_memstats), sizeof(memprof_stats));
+	if (!tmp_memstats)
+		goto end_memstats;
+
+	ctx->tmp_memstats = tmp_memstats;
+	memcpy(tmp_memstats, memprof_stats, sizeof(memprof_stats));
+
+	if (ctx->by_what == 1)
 		qsort(tmp_memstats, MEMPROF_HASH_BUCKETS+1, sizeof(tmp_memstats[0]), cmp_memprof_addr);
+	else if (ctx->by_what == 3)
+		qsort(tmp_memstats, MEMPROF_HASH_BUCKETS+1, sizeof(tmp_memstats[0]), cmp_memprof_ctx);
 	else
 		qsort(tmp_memstats, MEMPROF_HASH_BUCKETS+1, sizeof(tmp_memstats[0]), cmp_memprof_stats);
 
+	if (ctx->aggr) {
+		/* merge entries for the same caller and reset the exec_ctx */
+		for (i = j = 0; i < MEMPROF_HASH_BUCKETS; i++) {
+			if ((tmp_memstats[i].alloc_calls | tmp_memstats[i].free_calls) == 0)
+				continue;
+			for (j = i + 1; j < MEMPROF_HASH_BUCKETS; j++) {
+				if ((tmp_memstats[j].alloc_calls | tmp_memstats[j].free_calls) == 0)
+					continue;
+				if (tmp_memstats[j].caller != tmp_memstats[i].caller ||
+				    tmp_memstats[j].method != tmp_memstats[i].method ||
+				    tmp_memstats[j].info   != tmp_memstats[i].info)
+					continue;
+				tmp_memstats[i].locked_calls  += tmp_memstats[j].locked_calls;
+				tmp_memstats[i].alloc_calls   += tmp_memstats[j].alloc_calls;
+				tmp_memstats[i].free_calls    += tmp_memstats[j].free_calls;
+				tmp_memstats[i].alloc_tot     += tmp_memstats[j].alloc_tot;
+				tmp_memstats[i].free_tot      += tmp_memstats[j].free_tot;
+				/* don't dump the ctx */
+				tmp_memstats[i].exec_ctx.type = 0;
+				/* don't dump the merged entry */
+				tmp_memstats[j].alloc_calls = tmp_memstats[j].free_calls = 0;
+			}
+		}
+	}
+
+ memstats_resume:
 	if (!ctx->linenum)
 		chunk_appendf(&trash,
 		              "Alloc/Free statistics by call place over %.3f sec till %.3f sec ago:\n"
-		              "         Calls         |         Tot Bytes           |       Caller and method\n"
+		              "         Calls         |         Tot Bytes           |       Caller, method, extra info\n"
 		              "<- alloc -> <- free  ->|<-- alloc ---> <-- free ---->|\n",
 			      (prof_mem_start_ns ? (prof_mem_stop_ns ? prof_mem_stop_ns : now_ns) - prof_mem_start_ns : 0) / 1000000000.0,
 			      (prof_mem_stop_ns ? now_ns - prof_mem_stop_ns : 0) / 1000000000.0);
@@ -1200,6 +1315,7 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 				      (int)((1000ULL * entry->locked_calls / tot_calls) % 10));
 		}
 
+		chunk_append_thread_ctx(&trash, &entry->exec_ctx, " [via ", "]");
 		chunk_appendf(&trash, "\n");
 
 		if (applet_putchk(appctx, &trash) == -1)
@@ -1309,9 +1425,15 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 		      tot_alloc_calls - tot_free_calls,
 		      tot_alloc_bytes - tot_free_bytes);
 
+	/* release optional buffer name */
+	for (i = 0; i < max; i++)
+		ha_free(&tmp_memstats[i].info);
+
 	if (applet_putchk(appctx, &trash) == -1)
 		return 0;
 
+ end_memstats:
+	ha_free(&ctx->tmp_memstats);
 	ctx->linenum = 0; // reset first line to dump
 	if ((ctx->dump_step & 4) == 0)
 		ctx->dump_step++; // next step
@@ -1320,6 +1442,15 @@ static int cli_io_handler_show_profiling(struct appctx *appctx)
 #endif // USE_MEMORY_PROFILING
 
 	return 1;
+}
+
+/* release structs allocated by "show profiling" */
+static void cli_release_show_profiling(struct appctx *appctx)
+{
+	struct show_prof_ctx *ctx = appctx->svcctx;
+
+	ha_free(&ctx->tmp_activity);
+	ha_free(&ctx->tmp_memstats);
 }
 
 /* parse a "show profiling" command. It returns 1 on failure, 0 if it starts to dump.
@@ -1354,6 +1485,9 @@ static int cli_parse_show_profiling(char **args, char *payload, struct appctx *a
 		else if (strcmp(args[arg], "bytime") == 0) {
 			ctx->by_what = 2; // sort output by total time instead of usage
 		}
+		else if (strcmp(args[arg], "byctx") == 0) {
+			ctx->by_what = 3; // sort output by caller context instead of usage
+		}
 		else if (strcmp(args[arg], "aggr") == 0) {
 			ctx->aggr = 1;    // aggregate output by callee
 		}
@@ -1361,7 +1495,7 @@ static int cli_parse_show_profiling(char **args, char *payload, struct appctx *a
 			ctx->maxcnt = atoi(args[arg]); // number of entries to dump
 		}
 		else
-			return cli_err(appctx, "Expects either 'all', 'status', 'tasks', 'memory', 'byaddr', 'bytime', 'aggr' or a max number of output lines.\n");
+			return cli_err(appctx, "Expects either 'all', 'status', 'tasks', 'memory', 'byaddr', 'bytime', 'byctx', 'aggr' or a max number of output lines.\n");
 	}
 	return 0;
 }
@@ -1705,7 +1839,7 @@ INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
 static struct cli_kw_list cli_kws = {{ },{
 	{ { "set",  "profiling", NULL }, "set profiling <what> {auto|on|off}      : enable/disable resource profiling (tasks,memory)", cli_parse_set_profiling,  NULL },
 	{ { "show", "activity", NULL },  "show activity [-1|0|thread_num]         : show per-thread activity stats (for support/developers)", cli_parse_show_activity, cli_io_handler_show_activity, NULL },
-	{ { "show", "profiling", NULL }, "show profiling [<what>|<#lines>|<opts>]*: show profiling state (all,status,tasks,memory)",   cli_parse_show_profiling, cli_io_handler_show_profiling, NULL },
+	{ { "show", "profiling", NULL }, "show profiling [<what>|<#lines>|<opts>]*: show profiling state (all,status,tasks,memory)",   cli_parse_show_profiling, cli_io_handler_show_profiling, cli_release_show_profiling },
 	{ { "show", "tasks", NULL },     "show tasks                              : show running tasks",                               NULL, cli_io_handler_show_tasks,     NULL },
 	{{},}
 }};

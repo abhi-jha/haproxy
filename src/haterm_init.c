@@ -1,8 +1,14 @@
+#define _GNU_SOURCE
+#include <fcntl.h>
+
 #include <haproxy/api.h>
 #include <haproxy/buf.h>
 #include <haproxy/chunk.h>
 #include <haproxy/errors.h>
 #include <haproxy/global.h>
+#include <haproxy/hstream.h>
+#include <haproxy/pipe.h>
+#include <haproxy/tools.h>
 #include <haproxy/version.h>
 
 static int haterm_debug;
@@ -26,6 +32,8 @@ static void haterm_usage(char *name)
 		"        -c <curves> : ECSDA curves (ex: \"P-256\", \"P-384\"...)\n"
 		"        -v : shows version\n"
 		"        -d : enable the traces for all http protocols\n"
+		"        -dS : disables splice() usage even when available\n"
+		"        -dZ : disable zero-copy forwarding\n"
 		"        --" QUIC_BIND_LONG_OPT " <opts> : append options to QUIC \"bind\" lines\n"
 		"        --" TCP_BIND_LONG_OPT " <opts> : append options to TCP \"bind\" lines\n"
 		, name);
@@ -39,6 +47,9 @@ static void haterm_usage(char *name)
 static const char *haterm_cfg_dflt_str =
         "defaults\n"
             "\tmode haterm\n"
+#if defined(USE_LINUX_SPLICE)
+	    "\toption splice-response\n"
+#endif
             "\ttimeout client 25s\n";
 
 #define HATERM_CFG_CRT_STORE_STR_FMT \
@@ -106,7 +117,7 @@ static inline size_t hbuf_is_null(const struct hbuf *h)
 
 /* Simple function, to append <line> to <b> without without
  * trailing '\0' character.
- * Take into an account the '\t' and '\n' escaped sequeces.
+ * Take into an account the '\t' and '\n' escaped sequences.
  */
 static void hstream_str_buf_append(struct hbuf *h, const char *line)
 {
@@ -185,6 +196,10 @@ void haproxy_init_args(int argc, char **argv)
 	/* save the arguments */
 	sargc = argc; sargv = argv;
 
+#if defined(USE_LINUX_SPLICE)
+	global.tune.options |= GTUNE_USE_SPLICE;
+#endif
+
 	/* THIS PART MUST NOT MODIFY THE ARGUMENTS */
 	/* Parse the arguments which must be reused to build the conf. */
 	while (argc > 0) {
@@ -215,7 +230,7 @@ void haproxy_init_args(int argc, char **argv)
 		argc--; argv++;
 	}
 
-	/* Restore the argumenst */
+	/* Restore the arguments */
 	argc = sargc; argv = sargv;
 	while (argc > 0) {
 		char *opt;
@@ -241,6 +256,14 @@ void haproxy_init_args(int argc, char **argv)
 				}
 				else
 					haterm_usage(progname);
+			}
+#if defined(USE_LINUX_SPLICE)
+			else if (*opt == 'd' && *(opt+1) == 'S') {
+				global.tune.options &= ~GTUNE_USE_SPLICE;
+			}
+#endif
+			else if (*opt == 'd' && *(opt+1) == 'Z') {
+				global.tune.no_zero_copy_fwd |= NO_ZERO_COPY_FWD;
 			}
 			else if (*opt == 'd') {
 				/* empty option */
@@ -480,3 +503,103 @@ char **copy_argv(int argc, char **argv)
 
 	return ret;
 }
+
+
+#if defined(USE_LINUX_SPLICE)
+
+extern struct pipe *master_pipe;
+extern size_t master_pipesize;
+
+extern char common_response[RESPSIZE];
+extern char common_chunk_resp[RESPSIZE];
+extern char *random_resp;
+extern int random_resp_len;
+
+static void hstream_init_splicing(void)
+{
+	if (!(global.tune.options & GTUNE_USE_SPLICE))
+		return;
+
+	if (!global.tune.pipesize)
+		global.tune.pipesize = 65536 * 5 / 4;
+
+	master_pipe = get_pipe();
+	if (master_pipe) {
+		struct iovec v = { .iov_base = common_response,
+				   .iov_len = sizeof(common_response) };
+		int total, ret;
+
+		total = ret = 0;
+		do {
+			ret = vmsplice(master_pipe->prod, &v, 1, SPLICE_F_NONBLOCK);
+			if (ret > 0)
+				total += ret;
+		} while (ret > 0 && total < global.tune.pipesize);
+		master_pipesize = total;
+
+		if (master_pipesize < global.tune.pipesize) {
+			if (master_pipesize < 60*1024) {
+				/* Older kernels were limited to around 60-61 kB */
+				ha_warning("Failed to vmsplice response buffer after %lu bytes, splicing disabled\n", master_pipesize);
+				global.tune.options &= ~GTUNE_USE_SPLICE;
+				put_pipe(master_pipe);
+				master_pipe = NULL;
+			}
+			else
+				ha_warning("Splicing is limited to %lu bytes (too old kernel)\n", master_pipesize);
+		}
+	}
+	else {
+		ha_warning("Unable to allocate master pipe for splicing, splicing disabled\n");
+		global.tune.options &= ~GTUNE_USE_SPLICE;
+	}
+}
+
+static void hstream_deinit(void)
+{
+	if (master_pipe)
+		put_pipe(master_pipe);
+}
+
+REGISTER_POST_DEINIT(hstream_deinit);
+INITCALL0(STG_INIT_2, hstream_init_splicing);
+
+/* Build the response buffers.
+ * Return 1 if succeeded, -1 if failed.
+ */
+static int hstream_build_responses(void)
+{
+	int i;
+
+	for (i = 0; i < sizeof(common_response); i++) {
+		if (i % HS_COMMON_RESPONSE_LINE_SZ == HS_COMMON_RESPONSE_LINE_SZ - 1)
+			common_response[i] = '\n';
+		else if (i % 10 == 0)
+			common_response[i] = '.';
+		else
+			common_response[i] = '0' + i % 10;
+	}
+
+	/* original haterm chunk mode responses are made of 1-byte chunks
+	 * but the haproxy muxes do not support this. At this time
+	 * these responses are handled the same way as for common
+	 * responses with a pre-built buffer.
+	 */
+	for (i = 0; i < sizeof(common_chunk_resp); i++)
+		common_chunk_resp[i] = '1';
+
+	random_resp = malloc(random_resp_len);
+	if (!random_resp) {
+		ha_alert("not enough memory...\n");
+		return -1;
+	}
+
+	for (i = 0; i < random_resp_len; i++)
+		random_resp[i] = ha_random32() >> 16;
+
+	return 1;
+}
+
+REGISTER_POST_CHECK(hstream_build_responses);
+
+#endif

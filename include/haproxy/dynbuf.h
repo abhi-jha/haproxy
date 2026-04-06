@@ -37,6 +37,7 @@
 
 extern struct pool_head *pool_head_buffer;
 extern struct pool_head *pool_head_large_buffer;
+extern struct pool_head *pool_head_small_buffer;
 
 int init_buffer(void);
 void buffer_dump(FILE *o, struct buffer *b, int from, int to);
@@ -66,6 +67,12 @@ static inline int b_is_large_sz(size_t sz)
 	return (pool_head_large_buffer && sz == pool_head_large_buffer->size);
 }
 
+/* Return 1 if <sz> is the size of a small buffer */
+static inline int b_is_small_sz(size_t sz)
+{
+	return (pool_head_small_buffer && sz == pool_head_small_buffer->size);
+}
+
 /* Return 1 if <bug> is a  default buffer */
 static inline int b_is_default(struct buffer *buf)
 {
@@ -76,6 +83,12 @@ static inline int b_is_default(struct buffer *buf)
 static inline int b_is_large(struct buffer *buf)
 {
 	return b_is_large_sz(b_size(buf));
+}
+
+/* Return 1 if <buf> is a small buffer */
+static inline int b_is_small(struct buffer *buf)
+{
+	return b_is_small_sz(b_size(buf));
 }
 
 /**************************************************/
@@ -172,6 +185,8 @@ static inline char *__b_get_emergency_buf(void)
 		 * than the default buffers */				\
 		if (unlikely(b_is_large_sz(sz)))			\
 			pool_free(pool_head_large_buffer, area);	\
+		else if (unlikely(b_is_small_sz(sz)))			\
+			pool_free(pool_head_small_buffer, area);	\
 		else if (th_ctx->emergency_bufs_left < global.tune.reserved_bufs) \
 			th_ctx->emergency_bufs[th_ctx->emergency_bufs_left++] = area; \
 		else							\
@@ -184,6 +199,35 @@ static inline char *__b_get_emergency_buf(void)
 		if ((_buf)->size)		\
 			__b_free((_buf));	\
 	} while (0)
+
+
+static inline struct buffer *b_alloc_small(struct buffer *buf)
+{
+	char *area = NULL;
+
+	if (!buf->size) {
+		area = pool_alloc(pool_head_small_buffer);
+		if (!area)
+			return NULL;
+		buf->area = area;
+		buf->size = global.tune.bufsize_small;
+	}
+	return buf;
+}
+
+static inline struct buffer *b_alloc_large(struct buffer *buf)
+{
+	char *area = NULL;
+
+	if (!buf->size) {
+		area = pool_alloc(pool_head_large_buffer);
+		if (!area)
+			return NULL;
+		buf->area = area;
+		buf->size = global.tune.bufsize_large;
+	}
+	return buf;
+}
 
 /* Offer one or multiple buffer currently belonging to target <from> to whoever
  * needs one. Any pointer is valid for <from>, including NULL. Its purpose is
