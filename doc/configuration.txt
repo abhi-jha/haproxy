@@ -21146,6 +21146,7 @@ port_only                                          string       integer
 protobuf(field_number[,field_type])                binary       binary
 regsub(regex,subst[,flags])                        string       string
 reverse                                            string       string
+reverse_dom                                        string       string
 rfc7239_field(field)                               string       string
 rfc7239_is_valid                                   string       boolean
 rfc7239_n2nn                                       string       address / str
@@ -22662,6 +22663,38 @@ reverse
     #   moc.elpmaxe.bd  dbcluster
     # Pick a backend based on the domain suffix of the Host header:
     use_backend %[req.hdr(host),lower,reverse,map_beg(/etc/haproxy/hosts.map,default)]
+
+reverse_dom
+  Converts a string containing an FQDN-like hostname into its reversed-label
+  form. A single trailing dot on the input is ignored. Empty labels cause the
+  converter to fail.
+
+  This converter does not lowercase its input and does not strip any port.
+  It is meant to be combined with existing converters such as "lower" or
+  "host_only" when needed.
+
+  The trailing-dot policy is intentionally left to the caller. This allows
+  callers to decide whether they want to match the apex too or only
+  subdomains.
+
+  The reversed-label form is useful for large domain maps because it turns
+  domain suffix lookups into prefix lookups, allowing the use of indexed prefix
+  matchers such as "map_beg".
+
+  Examples:
+    "example.com" -> "com.example"
+    "mail.example.com" -> "com.example.mail"
+    "example.com." -> "com.example"
+
+    # match only subdomains of example.net, not the apex
+    acl example_net_sub req.hdr(Host),host_only,reverse_dom -m beg net.example.
+
+    # match only the apex
+    acl example_net_apex req.hdr(Host),host_only,reverse_dom -i net.example
+
+    # exact-or-subdomain prefix lookup using an explicit dotted form
+    http-request set-var(txn.rev_host) req.hdr(Host),host_only,reverse_dom,concat(.)
+    use_backend %[var(txn.rev_host),map_beg(/etc/haproxy/domains.map)]
 
 rfc7239_field(<field>)
   Extracts a single field/parameter from RFC 7239 compliant header value input.

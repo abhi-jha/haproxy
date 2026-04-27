@@ -2334,6 +2334,64 @@ static int sample_conv_reverse(const struct arg *arg_p, struct sample *smp, void
 	return 1;
 }
 
+/* Reverses the order of labels in an FQDN-like string. A single trailing dot
+ * on input is ignored. Empty labels are rejected.
+ */
+static int sample_conv_reverse_dom(const struct arg *arg_p, struct sample *smp, void *private)
+{
+	const char *input = smp->data.u.str.area;
+	struct buffer *trash;
+	int input_len = smp->data.u.str.data;
+	int out = 0;
+	int label_end;
+	int label_start;
+	int label_len;
+
+	if (!input_len)
+		return 0;
+
+	if (input[input_len - 1] == '.') {
+		input_len--;
+		if (!input_len)
+			return 0;
+	}
+
+	if (input[0] == '.')
+		return 0;
+
+	trash = get_trash_chunk_sz(input_len + 1);
+	if (!trash)
+		return 0;
+
+	label_end = input_len;
+	while (label_end > 0) {
+		label_start = label_end - 1;
+		while (label_start >= 0 && input[label_start] != '.')
+			label_start--;
+		label_start++;
+
+		if (label_start == label_end)
+			return 0;
+
+		label_len = label_end - label_start;
+		memcpy(trash->area + out, input + label_start, label_len);
+		out += label_len;
+
+		if (label_start == 0)
+			break;
+
+		trash->area[out++] = '.';
+		label_end = label_start - 1;
+	}
+
+	trash->area[out] = 0;
+	trash->data = out;
+	smp->data.u.str = *trash;
+	smp->data.type = SMP_T_STR;
+	smp->flags &= ~SMP_F_CONST;
+	return 1;
+}
+
 /* takes the IPv4 mask in args[0] and an optional IPv6 mask in args[1] */
 static int sample_conv_ipmask(const struct arg *args, struct sample *smp, void *private)
 {
@@ -5797,10 +5855,11 @@ static struct sample_conv_kw_list sample_conv_kws = {ILH, {
 	{ "param",   sample_conv_param,        ARG2(1,STR,STR),       sample_conv_param_check,  SMP_T_STR,  SMP_T_STR  },
 	{ "regsub",  sample_conv_regsub,       ARG3(2,REG,STR,STR),   sample_conv_regsub_check, SMP_T_STR,  SMP_T_STR  },
 	{ "sha1",    sample_conv_sha1,         0,                     NULL,                     SMP_T_BIN,  SMP_T_BIN  },
-	{ "strcmp",  sample_conv_strcmp,       ARG1(1,STR),           smp_check_strcmp,         SMP_T_STR,  SMP_T_SINT },
-	{ "host_only", sample_conv_host_only,  0,                     NULL,                     SMP_T_STR,  SMP_T_STR  },
-	{ "port_only", sample_conv_port_only,  0,                     NULL,                     SMP_T_STR,  SMP_T_SINT },
+	{ "strcmp",      sample_conv_strcmp,      ARG1(1,STR),        smp_check_strcmp,         SMP_T_STR,  SMP_T_SINT },
+	{ "host_only",   sample_conv_host_only,   0,                  NULL,                     SMP_T_STR,  SMP_T_STR  },
+	{ "port_only",   sample_conv_port_only,   0,                  NULL,                     SMP_T_STR,  SMP_T_SINT },
 	{ "reverse",     sample_conv_reverse,     0,                  NULL,                     SMP_T_STR,  SMP_T_STR  },
+	{ "reverse_dom", sample_conv_reverse_dom, 0,                  NULL,                     SMP_T_STR,  SMP_T_STR  },
 
 	/* gRPC converters. */
 	{ "ungrpc", sample_conv_ungrpc,    ARG2(1,PBUF_FNUM,STR), sample_conv_protobuf_check, SMP_T_BIN, SMP_T_BIN  },

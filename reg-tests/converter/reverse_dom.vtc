@@ -1,0 +1,94 @@
+varnishtest "reverse_dom converter test"
+
+feature ignore_unknown_macro
+
+server s1 {
+	rxreq
+	txresp -hdr "Connection: close"
+} -repeat 8 -start
+
+haproxy h1 -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+    .endif
+
+    defaults
+	mode http
+	timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    frontend fe
+	bind "fd@${fe}"
+
+	http-request set-var(txn.rev_const) str(MaIl.EXAMPLE.com),reverse_dom
+	http-request set-var(txn.rev_host) req.hdr(Host),host_only,reverse_dom if { req.hdr(Host) -m found }
+	http-request set-var(txn.rev_host_dot) var(txn.rev_host),concat(.) if { var(txn.rev_host) -m found }
+	http-request set-var(txn.route) var(txn.rev_host_dot),map_beg(${testdir}/reverse_dom.map,miss) if { var(txn.rev_host_dot) -m found }
+	http-request set-var(txn.sub_only) str(no)
+	http-request set-var(txn.sub_only) str(yes) if { var(txn.rev_host) -m beg com.example. }
+
+	http-request return status 200 hdr X-Rev-Const "%[var(txn.rev_const)]" hdr X-Rev-Host "%[var(txn.rev_host)]" hdr X-Route "%[var(txn.route)]" hdr X-Sub-Only "%[var(txn.sub_only)]"
+
+	default_backend be
+
+    backend be
+	server s1 ${s1_addr}:${s1_port}
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+	txreq -url "/" -hdr "Host: example.com"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-const == "com.EXAMPLE.MaIl"
+	expect resp.http.x-rev-host == "com.example"
+	expect resp.http.x-route == "example"
+	expect resp.http.x-sub-only == "no"
+
+	txreq -url "/" -hdr "Host: mail.example.com"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "com.example.mail"
+	expect resp.http.x-route == "mail"
+	expect resp.http.x-sub-only == "yes"
+
+	txreq -url "/" -hdr "Host: example.com."
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "com.example"
+	expect resp.http.x-route == "example"
+	expect resp.http.x-sub-only == "no"
+
+	txreq -url "/" -hdr "Host: localhost"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "localhost"
+	expect resp.http.x-route == "miss"
+	expect resp.http.x-sub-only == "no"
+
+	txreq -url "/" -hdr "Host: badexample.com"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "com.badexample"
+	expect resp.http.x-route == "miss"
+	expect resp.http.x-sub-only == "no"
+
+	txreq -url "/" -hdr "Host: foo..bar"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "<undef>"
+	expect resp.http.x-route == "<undef>"
+
+	txreq -url "/" -hdr "Host: .example.com"
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "<undef>"
+	expect resp.http.x-route == "<undef>"
+
+	txreq -url "/" -hdr "Host: ."
+	rxresp
+	expect resp.status == 200
+	expect resp.http.x-rev-host == "<undef>"
+	expect resp.http.x-route == "<undef>"
+} -run
