@@ -2311,6 +2311,29 @@ static int sample_conv_str2upper(const struct arg *arg_p, struct sample *smp, vo
 	return 1;
 }
 
+/* Reverses the input string byte by byte. */
+static int sample_conv_reverse(const struct arg *arg_p, struct sample *smp, void *private)
+{
+	const char *input = smp->data.u.str.area;
+	struct buffer *trash;
+	int input_len = smp->data.u.str.data;
+	int i;
+
+	trash = get_trash_chunk_sz(input_len + 1);
+	if (!trash)
+		return 0;
+
+	for (i = 0; i < input_len; i++)
+		trash->area[i] = input[input_len - 1 - i];
+
+	trash->area[input_len] = 0;
+	trash->data = input_len;
+	smp->data.u.str = *trash;
+	smp->data.type = SMP_T_STR;
+	smp->flags &= ~SMP_F_CONST;
+	return 1;
+}
+
 /* takes the IPv4 mask in args[0] and an optional IPv6 mask in args[1] */
 static int sample_conv_ipmask(const struct arg *args, struct sample *smp, void *private)
 {
@@ -5777,6 +5800,7 @@ static struct sample_conv_kw_list sample_conv_kws = {ILH, {
 	{ "strcmp",  sample_conv_strcmp,       ARG1(1,STR),           smp_check_strcmp,         SMP_T_STR,  SMP_T_SINT },
 	{ "host_only", sample_conv_host_only,  0,                     NULL,                     SMP_T_STR,  SMP_T_STR  },
 	{ "port_only", sample_conv_port_only,  0,                     NULL,                     SMP_T_STR,  SMP_T_SINT },
+	{ "reverse",     sample_conv_reverse,     0,                  NULL,                     SMP_T_STR,  SMP_T_STR  },
 
 	/* gRPC converters. */
 	{ "ungrpc", sample_conv_ungrpc,    ARG2(1,PBUF_FNUM,STR), sample_conv_protobuf_check, SMP_T_BIN, SMP_T_BIN  },

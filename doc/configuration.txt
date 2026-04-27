@@ -21145,6 +21145,7 @@ param(name[,delim])                                string       string
 port_only                                          string       integer
 protobuf(field_number[,field_type])                binary       binary
 regsub(regex,subst[,flags])                        string       string
+reverse                                            string       string
 rfc7239_field(field)                               string       string
 rfc7239_is_valid                                   string       boolean
 rfc7239_n2nn                                       string       address / str
@@ -22641,6 +22642,26 @@ regsub(<regex>,<subst>[,<flags>])
      # both lines do the same.
      http-request redirect location %[url,'regsub("(foo|bar)([0-9]+)?","\2\1",i)']
      http-request redirect location %[url,regsub(\"(foo|bar)([0-9]+)?\",\"\2\1\",i)]
+
+reverse
+  Reverses the input string byte by byte.
+
+  This converter is encoding-agnostic and reverses bytes, not characters; it is
+  not suitable for reversing human text encoded as UTF-8.
+
+  This can turn suffix lookups on the original string into prefix lookups on
+  the reversed string, allowing the use of indexed prefix matchers such as
+  "map_beg" on large maps.
+
+  Examples:
+    "example.com" -> "moc.elpmaxe"
+    "ab cd" -> "dc ba"
+
+    # Given a map file where each key contains a reversed hostname:
+    #   moc.elpmaxe.ppa app1
+    #   moc.elpmaxe.bd  dbcluster
+    # Pick a backend based on the domain suffix of the Host header:
+    use_backend %[req.hdr(host),lower,reverse,map_beg(/etc/haproxy/hosts.map,default)]
 
 rfc7239_field(<field>)
   Extracts a single field/parameter from RFC 7239 compliant header value input.
