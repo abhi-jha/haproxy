@@ -106,7 +106,8 @@ struct show_env_ctx {
 #define CLI_SHOWFD_F_ANY 0x0000003f   /* any type          */
 
 struct show_fd_ctx {
-	int fd;          /* first FD to show */
+	int fd;          /* first FD to show, -1=wildcard */
+	int tgid;        /* 0=unspecified, -1=wildcard, >0=specific tgid */
 	int show_one;    /* stop after showing one FD */
 	uint show_mask;  /* CLI_SHOWFD_F_xxx */
 };
@@ -1873,8 +1874,33 @@ static int cli_parse_show_fd(char **args, char *payload, struct appctx *appctx, 
 		ctx->show_mask = CLI_SHOWFD_F_ANY;
 
 	if (*args[arg]) {
-		ctx->fd = atoi(args[2]);
-		ctx->show_one = 1;
+		c = strchr(args[2], '/');
+		if (c) {
+			/* We allow the forms "<tgid>/" and "/<fd>" where the missing
+			 * value is considered a wildcard. So the first form means
+			 * "show me all the fds belonging to <tgid>", while the second
+			 * one means "show the fd <fd> for each thread group".
+			 */
+			if (c == args[2])
+				ctx->tgid = -1;
+			else
+				ctx->tgid = atoi(args[2]);
+			if (ctx->tgid > MAX_TGROUPS)
+				return cli_err(appctx, "Invalid TGID.\n");
+			c++;
+			if (!*c)
+				ctx->fd = -1;
+			else
+				ctx->fd = atoi(c);
+		} else {
+			ctx->fd = atoi(args[2]);
+		}
+
+		/* This will need to change when we implement split fd tables. We
+		 * completely ignore the tgid for now.
+		 */
+		if (ctx->fd != -1)
+			ctx->show_one = 1;
 	}
 
 	return 0;
