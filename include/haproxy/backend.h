@@ -30,6 +30,10 @@
 #include <haproxy/stream-t.h>
 #include <haproxy/time.h>
 
+extern struct list lb_ops_list;
+
+void lb_ops_register(struct lb_ops *ops);
+
 struct server *get_server_sh(struct proxy *px, const char *addr, int len, const struct server *avoid);
 struct server *get_server_uh(struct proxy *px, char *uri, int uri_len, const struct server *avoid);
 struct server *get_server_ph(struct proxy *px, const char *uri, int uri_len, const struct server *avoid);

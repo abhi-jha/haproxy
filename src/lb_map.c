@@ -269,11 +269,19 @@ struct server *map_get_server_hash(struct proxy *px, unsigned int hash)
 	return srv;
 }
 
-const struct lb_ops lb_map_ops = {
+static struct lb_ops lb_map_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM,      .match = BE_LB_KIND_RR | BE_LB_RR_STATIC },
+		{ .mask = BE_LB_KIND | BE_LB_HASH_TYPE, .match = BE_LB_KIND_HI | BE_LB_HASH_MAP },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_LKUP_MAP,
 	.proxy_init             = init_server_map,
 	.set_server_status_up   = map_set_server_status_up,
 	.set_server_status_down = map_set_server_status_down,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_map_ops);
 
 /*
  * Local variables:

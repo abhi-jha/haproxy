@@ -668,12 +668,19 @@ struct server *fwrr_get_next_server(struct proxy *p, struct server *srvtoavoid)
 	return srv;
 }
 
-const struct lb_ops lb_fwrr_ops = {
+static struct lb_ops lb_fwrr_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM, .match = BE_LB_KIND_RR | BE_LB_RR_DYN },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_LKUP_RRTREE | BE_LB_PROP_DYN,
 	.proxy_init             = fwrr_init_server_groups,
 	.set_server_status_up   = fwrr_set_server_status_up,
 	.set_server_status_down = fwrr_set_server_status_down,
 	.update_server_eweight  = fwrr_update_server_weight,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_fwrr_ops);
 
 /*
  * Local variables:

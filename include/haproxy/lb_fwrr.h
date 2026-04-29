@@ -30,8 +30,6 @@
 
 struct server *fwrr_get_next_server(struct proxy *p, struct server *srvtoavoid);
 
-extern const struct lb_ops lb_fwrr_ops;
-
 #endif /* _HAPROXY_LB_FWRR_H */
 
 /*

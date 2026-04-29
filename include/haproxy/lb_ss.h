@@ -29,6 +29,4 @@
 
 struct server *ss_get_server(struct proxy *px);
 
-extern const struct lb_ops lb_ss_ops;
-
 #endif /* _HAPROXY_LB_SS_H */

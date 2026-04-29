@@ -156,6 +156,7 @@ struct lbprm_per_tgrp {
  * The other ones might take it themselves if needed.
  */
 struct lb_ops {
+	struct list link;
 	int  (*proxy_init)(struct proxy *);              /* set up per-proxy LB state at config time; <0=fail */
 	void (*update_server_eweight)(struct server *);  /* to be called after eweight change // srvlock */
 	void (*set_server_status_up)(struct server *);   /* to be called after status changes to UP // srvlock */
@@ -166,6 +167,11 @@ struct lb_ops {
 	void (*proxy_deinit)(struct proxy *);            /* to be called when we're destroying the proxy */
 	void (*server_deinit)(struct server *);          /* to be called when we're destroying the server */
 	int  (*server_init)(struct server *);            /* initialize a freshly added server (runtime); <0=fail. */
+	uint32_t algo_prop;                              /* load balancing algorithm lookup and properties */
+	struct {
+		uint32_t mask;
+		uint32_t match;
+	} map[VAR_ARRAY];
 };
 
 /* LB parameters for all algorithms */

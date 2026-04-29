@@ -334,7 +334,12 @@ struct server *fas_get_next_server(struct proxy *p, struct server *srvtoavoid)
 	return srv;
 }
 
-const struct lb_ops lb_fas_ops = {
+static struct lb_ops lb_fas_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM, .match = BE_LB_KIND_CB | BE_LB_CB_FAS },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_LKUP_FSTREE | BE_LB_PROP_DYN,
 	.proxy_init             = fas_init_server_tree,
 	.set_server_status_up   = fas_set_server_status_up,
 	.set_server_status_down = fas_set_server_status_down,
@@ -342,6 +347,8 @@ const struct lb_ops lb_fas_ops = {
 	.server_take_conn       = fas_srv_reposition,
 	.server_drop_conn       = fas_srv_reposition,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_fas_ops);
 
 /*
  * Local variables:

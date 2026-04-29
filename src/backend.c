@@ -64,6 +64,13 @@
 
 #define TRACE_SOURCE &trace_strm
 
+struct list lb_ops_list = LIST_HEAD_INIT(lb_ops_list);
+
+void lb_ops_register(struct lb_ops *ops)
+{
+	LIST_APPEND(&lb_ops_list, &ops->link);
+}
+
 /* helper function to invoke the correct hash method */
 unsigned int gen_hash(const struct proxy* px, const char* key, unsigned long len)
 {

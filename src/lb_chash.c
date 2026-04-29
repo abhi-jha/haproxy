@@ -619,7 +619,13 @@ static int chash_init_server_tree(struct proxy *p)
 	return 0;
 }
 
-const struct lb_ops lb_chash_ops = {
+static struct lb_ops lb_chash_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM,      .match = BE_LB_KIND_RR | BE_LB_RR_RANDOM },
+		{ .mask = BE_LB_KIND | BE_LB_HASH_TYPE, .match = BE_LB_KIND_HI | BE_LB_HASH_CONS },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_LKUP_CHTREE | BE_LB_PROP_DYN,
 	.proxy_init             = chash_init_server_tree,
 	.set_server_status_up   = chash_set_server_status_up,
 	.set_server_status_down = chash_set_server_status_down,
@@ -627,3 +633,5 @@ const struct lb_ops lb_chash_ops = {
 	.server_init            = chash_server_init,
 	.server_deinit          = chash_server_deinit,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_chash_ops);

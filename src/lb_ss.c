@@ -21,6 +21,7 @@
 #include <haproxy/api.h>
 #include <haproxy/backend.h>
 #include <haproxy/lb_ss.h>
+#include <haproxy/list.h>
 #include <haproxy/server-t.h>
 
 /* This function elects a new stick server for proxy px.
@@ -179,8 +180,15 @@ struct server *ss_get_server(struct proxy *px)
 	return srv;
 }
 
-const struct lb_ops lb_ss_ops = {
+static struct lb_ops lb_ss_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM, .match = BE_LB_KIND_SA | BE_LB_SA_SS },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_PROP_DYN,
 	.proxy_init             = init_server_ss,
 	.set_server_status_up   = ss_set_server_status_up,
 	.set_server_status_down = ss_set_server_status_down,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_ss_ops);

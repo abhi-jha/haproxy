@@ -878,7 +878,12 @@ redo:
 	return srv;
 }
 
-const struct lb_ops lb_fwlc_ops = {
+static struct lb_ops lb_fwlc_ops = {ILH,
+	.map = {
+		{ .mask = BE_LB_KIND | BE_LB_PARM, .match = BE_LB_KIND_CB | BE_LB_CB_LC },
+		{ 0, 0 }
+	},
+	.algo_prop              = BE_LB_LKUP_LCTREE | BE_LB_PROP_DYN,
 	.proxy_init             = fwlc_init_server_tree,
 	.set_server_status_up   = fwlc_set_server_status_up,
 	.set_server_status_down = fwlc_set_server_status_down,
@@ -889,6 +894,8 @@ const struct lb_ops lb_fwlc_ops = {
 	.server_deinit          = fwlc_server_deinit,
 	.proxy_deinit           = fwlc_proxy_deinit,
 };
+
+INITCALL1(STG_REGISTER, lb_ops_register, &lb_fwlc_ops);
 
 /*
  * Local variables:

@@ -30,8 +30,6 @@
 struct server *map_get_server_rr(struct proxy *px, struct server *srvtoavoid);
 struct server *map_get_server_hash(struct proxy *px, unsigned int hash);
 
-extern const struct lb_ops lb_map_ops;
-
 #endif /* _HAPROXY_LB_MAP_H */
 
 /*

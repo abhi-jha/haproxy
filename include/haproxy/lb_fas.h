@@ -30,8 +30,6 @@
 
 struct server *fas_get_next_server(struct proxy *p, struct server *srvtoavoid);
 
-extern const struct lb_ops lb_fas_ops;
-
 #endif /* _HAPROXY_LB_FAS_H */
 
 /*

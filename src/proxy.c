@@ -1648,6 +1648,7 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	struct server_rule *srule;
 	struct sticking_rule *mrule;
 	struct logger *tmplogger;
+	struct lb_ops *ops;
 	unsigned int next_id;
 	int cfgerr = 0;
 	char *err = NULL;
@@ -2611,49 +2612,23 @@ int proxy_finalize(struct proxy *px, int *err_code)
 	 */
 
 	px->lbprm.algo &= ~(BE_LB_LKUP | BE_LB_PROP_DYN);
-	switch (px->lbprm.algo & BE_LB_KIND) {
-	case BE_LB_KIND_RR:
-		if ((px->lbprm.algo & BE_LB_PARM) == BE_LB_RR_STATIC) {
-			px->lbprm.algo |= BE_LB_LKUP_MAP;
-			px->lbprm.ops = &lb_map_ops;
-		} else if ((px->lbprm.algo & BE_LB_PARM) == BE_LB_RR_RANDOM) {
-			px->lbprm.algo |= BE_LB_LKUP_CHTREE | BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_chash_ops;
-		} else {
-			px->lbprm.algo |= BE_LB_LKUP_RRTREE | BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_fwrr_ops;
+	list_for_each_entry(ops, &lb_ops_list, link) {
+		int i;
+		for (i = 0; ops->map[i].match != 0; i++) {
+			if ((px->lbprm.algo & ops->map[i].mask) == ops->map[i].match) {
+				px->lbprm.ops = ops;
+				break;
+			}
 		}
-		break;
 
-	case BE_LB_KIND_CB:
-		if ((px->lbprm.algo & BE_LB_PARM) == BE_LB_CB_LC) {
-			px->lbprm.algo |= BE_LB_LKUP_LCTREE | BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_fwlc_ops;
-		} else {
-			px->lbprm.algo |= BE_LB_LKUP_FSTREE | BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_fas_ops;
+		if (px->lbprm.ops) {
+			px->lbprm.algo |= px->lbprm.ops->algo_prop;
+			if (px->lbprm.ops->proxy_init && px->lbprm.ops->proxy_init(px) < 0)
+				cfgerr++;
+			break;
 		}
-		break;
-
-	case BE_LB_KIND_HI:
-		if ((px->lbprm.algo & BE_LB_HASH_TYPE) == BE_LB_HASH_CONS) {
-			px->lbprm.algo |= BE_LB_LKUP_CHTREE | BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_chash_ops;
-		} else {
-			px->lbprm.algo |= BE_LB_LKUP_MAP;
-			px->lbprm.ops = &lb_map_ops;
-		}
-		break;
-	case BE_LB_KIND_SA:
-		if ((px->lbprm.algo & BE_LB_PARM) == BE_LB_SA_SS) {
-			px->lbprm.algo |= BE_LB_PROP_DYN;
-			px->lbprm.ops = &lb_ss_ops;
-		}
-		break;
 	}
-	if (px->lbprm.ops && px->lbprm.ops->proxy_init &&
-	    px->lbprm.ops->proxy_init(px) < 0)
-		cfgerr++;
+
 	HA_RWLOCK_INIT(&px->lbprm.lock);
 
 	if (px->options & PR_O_LOGASAP)
