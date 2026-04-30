@@ -277,6 +277,32 @@ static forceinline void qcc_rm_sc(struct qcc *qcc)
 	--qcc->nb_sc;
 }
 
+/* Checks if <qcc> connection can be used to attach new streams on it or if
+ * reuse is definitely blocked. This is based on constant parameters such as
+ * the server max-reuse limit or if the peer has requested a graceful shutdown.
+ * Flow control is not taken into account here as it can be adjusted
+ * dynamically over the connection lifetime.
+ *
+ * Returns a boolean value indicating if reuse is possible.
+ */
+static int qcc_be_is_reusable(const struct qcc *qcc)
+{
+	const struct server *srv = __objt_server(qcc->conn->target);
+
+	/* Shutdown initiated by the peer - in HTTP/3 this corresponds to a GOAWAY frame received. */
+	if (qcc->flags & QC_CF_CONN_SHUT)
+		return 0;
+
+	if (srv->max_reuse >= 0 && qcc->tot_sc > srv->max_reuse)
+		return 0;
+
+	/* Ensure we do not exceed the maximum usable stream ID. */
+	if (qcc->next_bidi_l > QCS_ID_MAX_STRM_CL_BIDI)
+		return 0;
+
+	return 1;
+}
+
 static inline int qcc_is_dead(const struct qcc *qcc)
 {
 	/* Maintain connection if there is still request streams active. */
@@ -288,12 +314,12 @@ static inline int qcc_is_dead(const struct qcc *qcc)
 	 * - error detected locally
 	 * - MUX timeout expired
 	 * - app layer shut (FE side only - used for stream.max-total)
-	 * - new stream initiating definitely blocked (BE side only - used for H3 GOAWAY reception)
+	 * - stream attach definitely blocked (BE side only - max-reuse reached or H3 GOAWAY reception)
 	 */
 	if (qcc->flags & (QC_CF_ERR_CONN|QC_CF_ERRL_DONE) ||
 	    !qcc->task ||
 	    (!conn_is_back(qcc->conn) && qcc->app_st == QCC_APP_ST_SHUT) ||
-	    (conn_is_back(qcc->conn) && (qcc->flags & QC_CF_CONN_SHUT))) {
+	    (conn_is_back(qcc->conn) && !qcc_be_is_reusable(qcc))) {
 		return 1;
 	}
 
@@ -3271,27 +3297,23 @@ static int qcc_io_recv(struct qcc *qcc)
  */
 static int qmux_avail_streams(struct connection *conn)
 {
-	struct server *srv = __objt_server(conn->target);
+	const struct server *srv = __objt_server(conn->target);
 	struct qcc *qcc = conn->ctx;
-	int ret, max_reuse = 0;
+	int ret;
 
-	/* Shutdown initiated by the peer - in HTTP/3 this corresponds to a GOAWAY frame received. */
-	if (qcc->flags & QC_CF_CONN_SHUT)
+	if (!qcc_be_is_reusable(qcc))
 		return 0;
 
 	ret = qcc_fctl_avail_streams(qcc, 1);
 
-	if (srv->max_reuse >= 0) {
-		max_reuse = qcc->tot_sc <= srv->max_reuse ?
-		  srv->max_reuse - qcc->tot_sc + 1: 0;
-		ret = MIN(ret, max_reuse);
-	}
-
-	/* Do not exceed maximum usable stream ID. To simplify the calcul,
-	 * limit is only applied when one or zero stream remains.
+	/* Now cap return value if reaching max-reuse server or maximum stream
+	 * ID. qcc_be_is_reusable() already detected if one of these has been
+	 * exceeded.
 	 */
-	if (ret && unlikely(qcc->next_bidi_l >= QCS_ID_MAX_STRM_CL_BIDI))
-		ret = qcc->next_bidi_l == QCS_ID_MAX_STRM_CL_BIDI ? 1 : 0;
+	if (ret > 1 && srv->max_reuse >= 0 && qcc->tot_sc == srv->max_reuse)
+		ret = 1;
+	else if (ret > 1 && unlikely(qcc->next_bidi_l == QCS_ID_MAX_STRM_CL_BIDI))
+		ret = 1;
 
 	return ret;
 }
