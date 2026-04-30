@@ -3247,12 +3247,12 @@ static void qcc_wait_for_hs(struct qcc *qcc)
 /* Proceed on receiving. Loop on streams subscribed in recv_list and performed
  * STREAM frames decoding upon them.
  *
- * Returns 0 on success else non-zero.
+ * Returns the number of newly transcoded bytes.
  */
 static int qcc_io_recv(struct qcc *qcc)
 {
 	struct qcs *qcs;
-	int ret;
+	int total = 0, ret;
 
 	TRACE_ENTER(QMUX_EV_QCC_RECV, qcc->conn);
 
@@ -3281,12 +3281,13 @@ static int qcc_io_recv(struct qcc *qcc)
 
 			if (ret <= 0)
 				goto done;
+			total += ret;
 		}
 	}
 
  done:
 	TRACE_LEAVE(QMUX_EV_QCC_RECV, qcc->conn);
-	return 0;
+	return total;
 }
 
 /* Calculate the number of bidirectional streams which can still be opened for
@@ -3613,7 +3614,7 @@ struct task *qcc_io_cb(struct task *t, void *ctx, unsigned int state)
 {
 	struct qcc *qcc = ctx;
 	struct connection *conn;
-	int conn_in_list;
+	int total = 0, conn_in_list;
 
 	if (state & TASK_F_USR1) {
 		/* the tasklet was idling on an idle connection, it might have
@@ -3661,16 +3662,17 @@ struct task *qcc_io_cb(struct task *t, void *ctx, unsigned int state)
 	}
 
 	if (!(qcc->wait_event.events & SUB_RETRY_SEND))
-		qcc_io_send(qcc);
+		total += qcc_io_send(qcc);
 
-	qcc_io_recv(qcc);
+	total += qcc_io_recv(qcc);
 
 	if (qcc_io_process(qcc)) {
 		TRACE_STATE("releasing dead connection", QMUX_EV_QCC_WAKE, conn);
 		goto release;
 	}
 
-	qcc_refresh_timeout(qcc);
+	if (total)
+		qcc_refresh_timeout(qcc);
 
 	/* Trigger pacing task is emission should be retried after some delay. */
 	if (qcc_is_pacing_active(conn)) {
