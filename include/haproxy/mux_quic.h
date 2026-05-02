@@ -20,7 +20,8 @@
 		_qcc_report_glitch(qcc, inc); 		\
 	})
 
-void qcc_set_error(struct qcc *qcc, int err, int app);
+void qcc_set_error(struct qcc *qcc, int err, int app, int tevt);
+void qcc_report_term_evt(struct qcc *qcc, enum muxc_term_event_type type);
 int _qcc_report_glitch(struct qcc *qcc, int inc);
 int qcc_fctl_avail_streams(const struct qcc *qcc, int bidi);
 struct qcs *qcc_init_stream_local(struct qcc *qcc, int bidi);
@@ -40,9 +41,10 @@ struct buffer *qcc_realloc_stream_txbuf(struct qcs *qcs);
 int qcc_realign_stream_txbuf(const struct qcs *qcs, struct buffer *out);
 int qcc_release_stream_txbuf(struct qcs *qcs);
 int qcc_stream_can_send(const struct qcs *qcs);
-void qcc_reset_stream(struct qcs *qcs, int err);
+void qcc_reset_stream(struct qcs *qcs, int err, int term_evt);
 void qcc_send_stream(struct qcs *qcs, int urg, int count);
 void qcc_abort_stream_read(struct qcs *qcs);
+void qcc_update_shut_id(struct qcc *qcc, uint64_t val);
 int qcc_recv(struct qcc *qcc, uint64_t id, uint64_t len, uint64_t offset,
              char fin, char *data);
 int qcc_recv_max_data(struct qcc *qcc, uint64_t max);
@@ -61,6 +63,9 @@ static inline int qmux_stream_rx_bufsz(void)
 #define QCS_ID_SRV_INTIATOR_BIT  0x1
 /* This bit is set for unidirectional streams */
 #define QCS_ID_DIR_BIT           0x2
+
+/* Maximum bidirectional stream ID that a client can open. */
+#define QCS_ID_MAX_STRM_CL_BIDI (QUIC_VARINT_8_BYTE_MAX - 3)
 
 static inline enum qcs_type qcs_id_type(uint64_t id)
 {

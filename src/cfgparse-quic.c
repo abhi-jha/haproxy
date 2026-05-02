@@ -32,6 +32,7 @@ struct quic_tune quic_tune = {
 		.sec_retry_threshold = QUIC_DFLT_SEC_RETRY_THRESHOLD,
 		.stream_data_ratio = QUIC_DFLT_FE_STREAM_DATA_RATIO,
 		.stream_max_concurrent = QUIC_DFLT_FE_STREAM_MAX_CONCURRENT,
+		.stream_max_total  = 0,
 		.stream_rxbuf      = 0,
 		.fb_opts = QUIC_TUNE_FB_TX_PACING|QUIC_TUNE_FB_TX_UDP_GSO,
 		.opts = QUIC_TUNE_FE_SOCK_PER_CONN,
@@ -234,7 +235,7 @@ static int bind_parse_quic_socket(char **args, int cur_arg, struct proxy *px,
 	return 0;
 }
 
-/* parse "quic-cc-algo" bind keyword */
+/* parse "quic-cc-algo" server keyword */
 static int srv_parse_quic_cc_algo(char **args, int *cur_arg, struct proxy *px,
                                   struct server *srv, char **err)
 {
@@ -369,7 +370,7 @@ static int cfg_parse_quic_time(char **args, int section_type,
 		ret = 1;
 	}
 	else {
-		memprintf(err, "'%s' keyword not unhandled (please report this bug).", args[0]);
+		memprintf(err, "'%s' keyword not handled (please report this bug).", args[0]);
 		ret = -1;
 	}
 
@@ -472,6 +473,9 @@ static int cfg_parse_quic_tune_setting(char **args, int section_type,
 		uint *ptr = (suffix[0] == 'b') ? &quic_tune.be.stream_max_concurrent :
 		                                 &quic_tune.fe.stream_max_concurrent;
 		*ptr = arg;
+	}
+	else if (strcmp(suffix, "fe.stream.max-total") == 0) {
+		quic_tune.fe.stream_max_total = arg;
 	}
 	else if (strcmp(suffix, "be.stream.rxbuf") == 0 ||
 	         strcmp(suffix, "fe.stream.rxbuf") == 0) {
@@ -585,7 +589,7 @@ static int cfg_parse_quic_tune_setting(char **args, int section_type,
 		ret = 1;
 	}
 	else {
-		memprintf(err, "'%s' keyword not unhandled (please report this bug).", args[0]);
+		memprintf(err, "'%s' keyword not handled (please report this bug).", args[0]);
 		return -1;
 	}
 
@@ -716,6 +720,7 @@ static struct cfg_kw_list cfg_kws = {ILH, {
 	{ CFG_GLOBAL, "tune.quic.fe.sock-per-conn", cfg_parse_quic_tune_sock_per_conn },
 	{ CFG_GLOBAL, "tune.quic.fe.stream.data-ratio", cfg_parse_quic_tune_setting },
 	{ CFG_GLOBAL, "tune.quic.fe.stream.max-concurrent", cfg_parse_quic_tune_setting },
+	{ CFG_GLOBAL, "tune.quic.fe.stream.max-total", cfg_parse_quic_tune_setting },
 	{ CFG_GLOBAL, "tune.quic.fe.stream.rxbuf", cfg_parse_quic_tune_setting },
 	{ CFG_GLOBAL, "tune.quic.fe.tx.pacing", cfg_parse_quic_tune_on_off },
 	{ CFG_GLOBAL, "tune.quic.fe.tx.udp-gso", cfg_parse_quic_tune_on_off },
@@ -782,7 +787,7 @@ static int quic_parse_quic_initial(char **args, int section_type, struct proxy *
 	}
 
 	if (!(curpx->mode & PR_MODE_HTTP)) {
-		memprintf(err, "'%s' : proxy '%s' does not used HTTP mode",
+		memprintf(err, "'%s' : proxy '%s' does not use HTTP mode",
 		          args[0], curpx->id);
 		return -1;
 	}

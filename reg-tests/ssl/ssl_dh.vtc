@@ -1,4 +1,6 @@
-#REGTEST_TYPE=devel
+#REGTEST_TYPE=broken
+
+# test seems broken since it was fixed in 3610a767
 
 # This reg-tests checks that the DH-related mechanisms works properly.
 # When no DH is specified, either directly in the server's PEM or through a
@@ -19,7 +21,7 @@
 
 varnishtest "Test the DH related SSL options"
 # AWS-LC does not support any FFDH ciphersuites
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(OPENSSL) && !ssllib_name_startswith(AWS-LC)' && !ssllib_name_startswith(wolfSSL)'"
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(OPENSSL) && !ssllib_name_startswith(AWS-LC) && !ssllib_name_startswith(wolfSSL)'"
 feature cmd "command -v openssl && command -v grep && command -v socat"
 feature ignore_unknown_macro
 

@@ -9,17 +9,16 @@ on:
   schedule:
     - cron: "0 0 * * 2"
 
+permissions:
+  contents: read
 
 jobs:
   combined-build-and-run:
     runs-on: ubuntu-24.04
     if: ${{ github.repository_owner == 'haproxy' || github.event_name == 'workflow_dispatch' }}
-    permissions:
-      contents: read
-      packages: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Update Docker to the latest
         uses: docker/setup-docker-action@v4
@@ -50,7 +49,7 @@ jobs:
           python run.py -j result.json -l logs-ngtcp2 -r haproxy=local:aws-lc -t "handshake,transfer,longrtt,chacha20,multiplexing,retry,resumption,zerortt,http3,blackhole,keyupdate,ecn,amplificationlimit,handshakeloss,transferloss,handshakecorruption,transfercorruption,ipv6,v2" -c ngtcp2 -s haproxy
 
       - name: Delete succeeded logs
-        if: failure()
+        if: ${{ failure() }}
         run: |
           for client in chrome picoquic quic-go ngtcp2; do
             pushd quic-interop-runner/logs-${client}/haproxy_${client}
@@ -59,8 +58,8 @@ jobs:
           done
 
       - name: Logs upload
-        if: failure()
-        uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
         with:
           name: logs
           path: quic-interop-runner/logs*/

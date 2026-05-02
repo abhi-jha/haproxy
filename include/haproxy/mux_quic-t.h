@@ -46,6 +46,8 @@ struct qcc {
 	enum qcc_app_st app_st; /* application layer state */
 	int glitches;   /* total number of glitches on this connection */
 
+	uint32_t term_evts_log;  /* termination events log */
+
 	/* flow-control fields set by us enforced on our side. */
 	struct {
 		struct list frms; /* prepared frames related to flow-control  */
@@ -80,7 +82,7 @@ struct qcc {
 	struct {
 		struct quic_fctl fc; /* stream flow control applied on sending */
 		uint64_t buf_in_flight; /* sum of currently allocated Tx buffer sizes */
-		struct list frms; /* list of STREAM frames ready for sent */
+		struct list frms; /* list of STREAM frames ready for sending */
 		union {
 			struct {
 				/* quic */
@@ -93,6 +95,7 @@ struct qcc {
 	} tx;
 	struct {
 		struct buffer qstrm_buf;
+		uint64_t rlen; /* last record length read */
 	} rx;
 
 	uint64_t largest_bidi_r; /* largest remote bidi stream ID opened. */
@@ -211,6 +214,12 @@ enum qcc_app_ops_close_side {
 	QCC_APP_OPS_CLOSE_SIDE_WR /* Write channel closed (STOP_SENDING received). */
 };
 
+enum qcc_app_ops_lclose_mode {
+	QCC_APP_OPS_LCLO_MODE_NORMAL,
+	QCC_APP_OPS_LCLO_MODE_ABORT,
+	QCC_APP_OPS_LCLO_MODE_KILL_CONN,
+};
+
 /* QUIC application layer operations */
 struct qcc_app_ops {
 	const char *alpn;
@@ -233,8 +242,10 @@ struct qcc_app_ops {
 	size_t (*nego_ff)(struct qcs *qcs, size_t count);
 	size_t (*done_ff)(struct qcs *qcs);
 
-	/* Notify about <qcs> stream closure. */
+	/* Notify about <qcs> stream remote closure. */
 	int (*close)(struct qcs *qcs, enum qcc_app_ops_close_side side);
+	/* Notify about <qcs> stream upper layer closure. */
+	void (*lclose)(struct qcs *qcs, enum qcc_app_ops_lclose_mode mode);
 	/* Free <qcs> stream app context. */
 	void (*detach)(struct qcs *qcs);
 
@@ -258,7 +269,7 @@ struct qcc_app_ops {
 #define QC_CF_ERRL_DONE 0x00000002 /* local error properly handled, connection can be released */
 #define QC_CF_IS_BACK   0x00000004 /* backend side */
 #define QC_CF_CONN_FULL 0x00000008 /* no stream buffers available on connection */
-/* unused 0x00000010 */
+#define QC_CF_CONN_SHUT 0x00000010 /* peer has initiated app layer shutdown - no new stream should be opened locally */
 #define QC_CF_ERR_CONN  0x00000020 /* fatal error reported by transport layer */
 #define QC_CF_WAIT_HS   0x00000040 /* MUX init before QUIC handshake completed (0-RTT) */
 

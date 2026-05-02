@@ -119,7 +119,7 @@ struct buffer *get_large_trash_chunk(void)
 	return large_trash_chunk;
 }
 
-/* Similar to get_trash_chunk() but return a pre-allocated small chunk
+/* Similar to get_trash_chunk() but returns a pre-allocated small chunk
  * instead. Because small buffers are not enabled by default, this function may
  * return NULL.
  */
@@ -170,7 +170,7 @@ struct buffer *get_larger_trash_chunk(struct buffer *chk)
 		/* no chunk or a small one, use a regular buffer */
 		chunk = get_trash_chunk();
 	}
-	else if (large_trash_size && chk->size <= large_trash_size) {
+	else if (large_trash_size && chk->size < large_trash_size) {
 		/* a regular byffer, use a large buffer if possible */
 		chunk = get_large_trash_chunk();
 	}
@@ -233,7 +233,7 @@ static int alloc_trash_buffers_per_thread()
 {
 	return (alloc_trash_buffers(global.tune.bufsize) &&
 		alloc_large_trash_buffers(global.tune.bufsize_large) &&
-		alloc_small_trash_buffers(global.tune.bufsize_large));
+		alloc_small_trash_buffers(global.tune.bufsize_small));
 }
 
 static void free_trash_buffers_per_thread()

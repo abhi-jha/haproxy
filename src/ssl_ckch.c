@@ -1098,7 +1098,7 @@ struct ckch_store *ckchs_dup(const struct ckch_store *src)
 		/* copy the array of domain strings */
 
 		while (src->conf.acme.domains[n]) {
-			r = realloc(r, sizeof(char *) * (n + 2));
+			r = my_realloc2(r, sizeof(char *) * (n + 2));
 			if (!r)
 				goto error;
 
@@ -1110,6 +1110,26 @@ struct ckch_store *ckchs_dup(const struct ckch_store *src)
 		}
 		r[n] = 0;
 		dst->conf.acme.domains = r;
+	}
+
+	if (src->conf.acme.ips) {
+		r = NULL;
+		n = 0;
+
+		/* copy the array of IP strings */
+
+		while (src->conf.acme.ips[n]) {
+			r = my_realloc2(r, sizeof(char *) * (n + 2));
+			if (!r)
+				goto error;
+
+			r[n] = strdup(src->conf.acme.ips[n]);
+			if (!r[n])
+				goto error;
+			n++;
+		}
+		r[n] = 0;
+		dst->conf.acme.ips = r;
 	}
 
 	return dst;
@@ -4801,9 +4821,9 @@ static int ckch_conf_load_pem_or_generate(void *value, char *buf, struct ckch_st
 		if (!s->conf.gencrt.key.type)
 			type = EVP_PKEY_RSA;
 		else {
-			if (!strcmp(s->conf.gencrt.key.type, "RSA"))
+			if (strcmp(s->conf.gencrt.key.type, "RSA") == 0)
 				type = EVP_PKEY_RSA;
-			else if (!strcmp(s->conf.gencrt.key.type, "ECDSA"))
+			else if (strcmp(s->conf.gencrt.key.type, "ECDSA") == 0)
 				type = EVP_PKEY_EC;
 			else {
 				memprintf(err, "keyword 'keytype' requires either 'RSA' or 'ECDSA'.");
@@ -4904,6 +4924,7 @@ struct ckch_conf_kws ckch_conf_kws[] = {
 	{ "acme",         offsetof(struct ckch_conf, acme.id),          PARSE_TYPE_STR,   ckch_conf_acme_init,            },
 #endif
 	{ "domains",      offsetof(struct ckch_conf, acme.domains),     PARSE_TYPE_ARRAY_SUBSTR,   NULL,            },
+	{ "ips",          offsetof(struct ckch_conf, acme.ips),         PARSE_TYPE_ARRAY_SUBSTR,   NULL,            },
 	{ "generate-dummy", offsetof(struct ckch_conf, gencrt.on),      PARSE_TYPE_ONOFF, NULL,                           },
 	{ "keytype",      offsetof(struct ckch_conf, gencrt.key.type),  PARSE_TYPE_STR,   NULL,                           },
 	{ "bits",         offsetof(struct ckch_conf, gencrt.key.bits),  PARSE_TYPE_INT,   NULL,                           },
@@ -5176,7 +5197,7 @@ int ckch_conf_parse(char **args, int cur_arg, struct ckch_conf *f, int *found, c
 				do {
 					while (*e != ',' && *e != '\0')
 						e++;
-					r = realloc(r, sizeof(char *) * (n + 2));
+					r = my_realloc2(r, sizeof(char *) * (n + 2));
 					if (!r) {
 						ha_alert("parsing [%s:%d]: out of memory.\n", file, linenum);
 						err_code |= ERR_ALERT | ERR_ABORT;
@@ -5275,6 +5296,14 @@ void ckch_conf_clean(struct ckch_conf *conf)
 		free(prev);
 	}
 	ha_free(&conf->acme.domains);
+
+	r = conf->acme.ips;
+	while (r && *r) {
+		char *prev = *r;
+		r++;
+		free(prev);
+	}
+	ha_free(&conf->acme.ips);
 
 }
 

@@ -1895,6 +1895,18 @@ int peer_treat_updatemsg(struct appctx *appctx, struct peer *p, int updt, int ex
 
 	newts->shard = stktable_get_key_shard(table, newts->key.key, keylen);
 
+	/* stksess_new has set the entry expire to the table expire delay,
+	 * if it is a new entry set_entry inserts at that position in the expire
+	 * tree the touch_remote updates this date but the tree's re-order is not
+	 * designed to set back in the past, and the entry will be trashed only
+	 * after a full table's expire delay regardless of the setting.
+	 * But setting the expire on newts here allows to set directly new entries
+	 * at the right position and to trash the entry in time if it is a newly
+	 * created one from resync process for instance.
+	 */
+	newts->expire = tick_add(now_ms, expire);
+
+
 	/* lookup for existing entry */
 	ts = stktable_set_entry(table, newts);
 	if (ts != newts) {
@@ -2097,12 +2109,12 @@ int peer_treat_updatemsg(struct appctx *appctx, struct peer *p, int updt, int ex
 			}
 
 			dc = p->dcache;
+			if (id > dc->max_entries) {
+				TRACE_ERROR("malformed update message: invalid dict value", PEERS_EV_SESS_IO|PEERS_EV_PROTO_ERR, appctx, p, st);
+				goto malformed_unlock;
+			}
 			if (*msg_cur == end) {
 				/* Dictionary entry key without value. */
-				if (id > dc->max_entries) {
-					TRACE_ERROR("malformed update message: invalid dict value", PEERS_EV_SESS_IO|PEERS_EV_PROTO_ERR, appctx, p, st);
-					goto malformed_unlock;
-				}
 				/* IDs sent over the network are numbered from 1. */
 				de = dc->rx[id - 1].de;
 			}
@@ -2228,7 +2240,7 @@ static inline int peer_treat_ackmsg(struct appctx *appctx, struct peer *p,
 
 	table_id = intdecode(msg_cur, msg_end);
 	if (!*msg_cur || (*msg_cur + sizeof(update) > msg_end)) {
-		TRACE_ERROR("malformed ackk message: no table id", PEERS_EV_SESS_IO|PEERS_EV_RX_MSG|PEERS_EV_PROTO_ERR, appctx, p);
+		TRACE_ERROR("malformed ack message: no table id", PEERS_EV_SESS_IO|PEERS_EV_RX_MSG|PEERS_EV_PROTO_ERR, appctx, p);
 		appctx->st0 = PEER_SESS_ST_ERRPROTO;
 		ret = 0;
 		goto end;
@@ -2567,7 +2579,7 @@ static inline int peer_recv_msg(struct appctx *appctx, char *msg_head, size_t ms
 	if (reql < 0 || se_fl_test(appctx->sedesc, SE_FL_SHW)) {
 		/* there was an error or the message was truncated */
 		appctx->st0 = PEER_SESS_ST_END;
-		TRACE_ERROR("error or messafe truncated", PEERS_EV_SESS_IO|PEERS_EV_RX_ERR, appctx);
+		TRACE_ERROR("error or message truncated", PEERS_EV_SESS_IO|PEERS_EV_RX_ERR, appctx);
 		return -1;
 	}
 
@@ -2602,7 +2614,7 @@ static inline int peer_treat_awaited_msg(struct appctx *appctx, struct peer *pee
 
 			/* flag to start to teach lesson */
 			peer->flags |= (PEER_F_TEACH_PROCESS|PEER_F_DBG_RESYNC_REQUESTED);
-			TRACE_STATE("peer elected to teach leasson to remote peer", PEERS_EV_SESS_RESYNC|PEERS_EV_PROTO_CTRL, appctx, peer);
+			TRACE_STATE("peer elected to teach lesson to remote peer", PEERS_EV_SESS_RESYNC|PEERS_EV_PROTO_CTRL, appctx, peer);
 		}
 		else if (msg_head[1] == PEER_MSG_CTRL_RESYNCFINISHED) {
 			TRACE_PROTO("Full resync finished message received", PEERS_EV_SESS_IO|PEERS_EV_RX_MSG|PEERS_EV_PROTO_CTRL, appctx, peer);
@@ -3559,11 +3571,11 @@ static void sync_peer_app_state(struct peers *peers, struct peer *peer)
 	}
 	else if (peer->appstate == PEER_APP_ST_STARTING) {
 		clear_peer_learning_status(peer);
-		if (peer->local & appctx_is_back(peer->appctx)) {
+		if (peer->local && appctx_is_back(peer->appctx)) {
 			/* if local peer has accepted the connection (appctx is
 			 * on the backend side), flag it to learn a lesson and
 			 * be sure it will start immediately. This only happens
-			 * if no resync is in progress and if the lacal resync
+			 * if no resync is in progress and if the local resync
 			 * was not already performed.
 			 */
 			if ((peers->flags & PEERS_RESYNC_STATEMASK) == PEERS_RESYNC_FROMLOCAL &&

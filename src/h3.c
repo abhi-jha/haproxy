@@ -123,6 +123,7 @@ INITCALL1(STG_REGISTER, trace_register_source, TRACE_SOURCE);
 #define H3_CF_UNI_QPACK_DEC_SET 0x00000008  /* Remote QPACK decoder stream opened */
 #define H3_CF_UNI_QPACK_ENC_SET 0x00000010  /* Remote QPACK encoder stream opened */
 #define H3_CF_GOAWAY_SENT       0x00000020  /* GOAWAY sent on local control stream */
+#define H3_CF_GOAWAY_RECV       0x00000040  /* GOAWAY received from the peer */
 
 /* Default settings */
 static uint64_t h3_settings_qpack_max_table_capacity = 0;
@@ -140,7 +141,8 @@ struct h3c {
 	uint64_t qpack_blocked_streams;
 	uint64_t max_field_section_size;
 
-	uint64_t id_goaway; /* stream ID used for a GOAWAY frame */
+	uint64_t id_shut_l; /* GOAWAY ID locally emitted */
+	uint64_t id_shut_r; /* GOAWAY ID emitted by the peer */
 
 	struct buffer_wait buf_wait; /* wait list for buffer allocations */
 	/* Stats counters */
@@ -200,7 +202,8 @@ static ssize_t h3_init_uni_stream(struct h3c *h3c, struct qcs *qcs,
 	case H3_UNI_S_T_CTRL:
 		if (h3c->flags & H3_CF_UNI_CTRL_SET) {
 			TRACE_ERROR("duplicated control stream", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
-			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1);
+			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1,
+			              muxc_tevt_type_proto_err);
 			qcc_report_glitch(qcs->qcc, 1);
 			goto err;
 		}
@@ -216,7 +219,8 @@ static ssize_t h3_init_uni_stream(struct h3c *h3c, struct qcs *qcs,
 	case H3_UNI_S_T_QPACK_DEC:
 		if (h3c->flags & H3_CF_UNI_QPACK_DEC_SET) {
 			TRACE_ERROR("duplicated qpack decoder stream", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
-			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1);
+			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1,
+			              muxc_tevt_type_proto_err);
 			qcc_report_glitch(qcs->qcc, 1);
 			goto err;
 		}
@@ -228,7 +232,8 @@ static ssize_t h3_init_uni_stream(struct h3c *h3c, struct qcs *qcs,
 	case H3_UNI_S_T_QPACK_ENC:
 		if (h3c->flags & H3_CF_UNI_QPACK_ENC_SET) {
 			TRACE_ERROR("duplicated qpack encoder stream", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
-			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1);
+			qcc_set_error(qcs->qcc, H3_ERR_STREAM_CREATION_ERROR, 1,
+			              muxc_tevt_type_proto_err);
 			qcc_report_glitch(qcs->qcc, 1);
 			goto err;
 		}
@@ -238,9 +243,9 @@ static ssize_t h3_init_uni_stream(struct h3c *h3c, struct qcs *qcs,
 		break;
 
 	default:
-		/* draft-ietf-quic-http34 9. Extensions to HTTP/3
+		/* RFC 9114 Section 9. Extensions to HTTP/3
 		 *
-		 * Implementations MUST [...] abort reading on unidirectional
+		 * Implementations MUST abort reading on unidirectional
 		 * streams that have unknown or unsupported types.
 		 */
 		TRACE_STATE("abort reading on unknown uni stream type", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
@@ -1063,19 +1068,6 @@ static ssize_t h3_req_headers_to_htx(struct qcs *qcs, const struct buffer *buf,
 		goto out;
 	}
 
-	/* RFC 9114 5.2. Connection Shutdown
-	 *
-	 * The GOAWAY frame contains an identifier that
-	 * indicates to the receiver the range of requests or pushes that were
-	 * or might be processed in this connection.  The server sends a client-
-	 * initiated bidirectional stream ID; the client sends a push ID.
-	 * Requests or pushes with the indicated identifier or greater are
-	 * rejected (Section 4.1.1) by the sender of the GOAWAY.  This
-	 * identifier MAY be zero if no requests or pushes were processed.
-	 */
-	if (qcs->id >= h3c->id_goaway)
-		h3c->id_goaway = qcs->id + 4;
-
  out:
 	/* HTX may be non NULL if error before previous htx_to_buf(). */
 	if (htx)
@@ -1640,7 +1632,7 @@ static ssize_t h3_parse_settings_frm(struct h3c *h3c, const struct buffer *buf,
 		h3_debug_printf(stderr, "%s id: %llu value: %llu\n",
 		                __func__, (unsigned long long)id, (unsigned long long)value);
 
-		/* draft-ietf-quic-http34 7.2.4. SETTINGS
+		/* RFC 9114 Section 7.2.4. SETTINGS
 		 *
 		 * The same setting identifier MUST NOT occur more than once in the
 		 * SETTINGS frame.  A receiver MAY treat the presence of duplicate
@@ -1673,9 +1665,9 @@ static ssize_t h3_parse_settings_frm(struct h3c *h3c, const struct buffer *buf,
 		case H3_SETTINGS_RESERVED_3:
 		case H3_SETTINGS_RESERVED_4:
 		case H3_SETTINGS_RESERVED_5:
-			/* draft-ietf-quic-http34 7.2.4.1. Defined SETTINGS Parameters
+			/* RFC 9114 Section 7.2.4.1. Defined SETTINGS Parameters
 			 *
-			 * Setting identifiers which were defined in [HTTP2] where there is no
+			 * Setting identifiers which were defined in [HTTP/2] where there is no
 			 * corresponding HTTP/3 setting have also been reserved
 			 * (Section 11.2.2).  These reserved settings MUST NOT be sent, and
 			 * their receipt MUST be treated as a connection error of type
@@ -1691,6 +1683,44 @@ static ssize_t h3_parse_settings_frm(struct h3c *h3c, const struct buffer *buf,
 	}
 
 	TRACE_LEAVE(H3_EV_RX_FRAME|H3_EV_RX_SETTINGS, h3c->qcc->conn);
+	return ret;
+}
+
+static ssize_t h3_parse_goaway_frm(struct h3c *h3c, const struct buffer *buf,
+                                   size_t len)
+{
+	struct buffer b;
+	uint64_t id;
+	size_t ret = 0;
+
+	TRACE_ENTER(H3_EV_RX_FRAME, h3c->qcc->conn);
+
+	b = b_make(b_orig(buf), b_size(buf), b_head_ofs(buf), len);
+	if (!b_quic_dec_int(&id, &b, &ret)) {
+		h3c->err = H3_ERR_FRAME_ERROR;
+		qcc_report_glitch(h3c->qcc, 1);
+		return -1;
+	}
+
+	if ((h3c->flags & H3_CF_GOAWAY_RECV) && id > h3c->id_shut_r) {
+		h3c->err = H3_ERR_ID_ERROR;
+		qcc_report_glitch(h3c->qcc, 1);
+		return -1;
+	}
+
+	h3c->flags |= H3_CF_GOAWAY_RECV;
+	h3c->id_shut_r = id;
+
+	/* RFC 9114 5.2. Connection Shutdown
+	 *
+	 * Endpoints MUST NOT initiate new requests or promise new pushes on the
+	 * connection after receipt of a GOAWAY frame from the peer. Clients MAY
+	 * establish a new connection to send additional requests.
+	 */
+	h3c->qcc->flags |= QC_CF_CONN_SHUT;
+	qcc_report_term_evt(h3c->qcc, muxc_tevt_type_goaway_rcvd);
+
+	TRACE_LEAVE(H3_EV_RX_FRAME, h3c->qcc->conn);
 	return ret;
 }
 
@@ -1747,7 +1777,8 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 	 */
 	if (h3s->type == H3S_T_CTRL && fin) {
 		TRACE_ERROR("control stream closed by remote peer", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-		qcc_set_error(qcs->qcc, H3_ERR_CLOSED_CRITICAL_STREAM, 1);
+		qcc_set_error(qcs->qcc, H3_ERR_CLOSED_CRITICAL_STREAM, 1,
+		              muxc_tevt_type_proto_err);
 		qcc_report_glitch(qcs->qcc, 1);
 		goto err;
 	}
@@ -1758,13 +1789,14 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 		/* FIN received, ensure body length is conform to any content-length header. */
 		if ((h3s->flags & H3_SF_HAVE_CLEN) && h3_check_body_size(qcs, 1)) {
 			qcc_abort_stream_read(qcs);
-			qcc_reset_stream(qcs, h3s->err);
+			qcc_reset_stream(qcs, h3s->err, se_tevt_type_proto_err);
 			goto done;
 		}
 
 		if (qcs_http_handle_standalone_fin(qcs)) {
 			TRACE_ERROR("cannot set EOM", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-			qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1);
+			qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1,
+			              muxc_tevt_type_internal_err);
 			goto err;
 		}
 
@@ -1790,7 +1822,7 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 
 			if ((ret = h3_check_frame_valid(h3c, qcs, ftype))) {
 				TRACE_ERROR("received an invalid frame", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-				qcc_set_error(qcs->qcc, ret, 1);
+				qcc_set_error(qcs->qcc, ret, 1, muxc_tevt_type_proto_err);
 				qcc_report_glitch(qcs->qcc, 1);
 				goto err;
 			}
@@ -1831,7 +1863,8 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 			 */
 			if (flen > qmux_stream_rx_bufsz()) {
 				TRACE_ERROR("received a too big frame", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-				qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1);
+				qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1,
+				              muxc_tevt_type_other_err);
 				qcc_report_glitch(qcs->qcc, 1);
 				goto err;
 			}
@@ -1839,7 +1872,8 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 			/* TODO extend parser to support the realignment of a frame. */
 			if (b_head(b) + b_data(b) > b_wrap(b)) {
 				TRACE_ERROR("cannot parse unaligned data frame", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-				qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1);
+				qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1,
+				              muxc_tevt_type_other_err);
 				qcc_report_glitch(qcs->qcc, 1);
 				goto err;
 			}
@@ -1896,10 +1930,17 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 				h3s->st_req = H3S_ST_REQ_TRAILERS;
 			}
 			break;
+		case H3_FT_GOAWAY:
+			ret = h3_parse_goaway_frm(qcs->qcc->ctx, b, flen);
+			if (ret < 0) {
+				TRACE_ERROR("error on GOAWAY parsing", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
+				qcc_set_error(qcs->qcc, h3c->err, 1, muxc_tevt_type_proto_err);
+				goto err;
+			}
+			break;
 		case H3_FT_CANCEL_PUSH:
 		case H3_FT_PUSH_PROMISE:
 		case H3_FT_MAX_PUSH_ID:
-		case H3_FT_GOAWAY:
 			/* Not supported */
 			ret = flen;
 			break;
@@ -1907,13 +1948,13 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 			ret = h3_parse_settings_frm(qcs->qcc->ctx, b, flen);
 			if (ret < 0) {
 				TRACE_ERROR("error on SETTINGS parsing", H3_EV_RX_FRAME, qcs->qcc->conn, qcs);
-				qcc_set_error(qcs->qcc, h3c->err, 1);
+				qcc_set_error(qcs->qcc, h3c->err, 1, muxc_tevt_type_proto_err);
 				goto err;
 			}
 			h3c->flags |= H3_CF_SETTINGS_RECV;
 			break;
 		default:
-			/* draft-ietf-quic-http34 9. Extensions to HTTP/3
+			/* RFC 9114 Section 9. Extensions to HTTP/3
 			 *
 			 * Implementations MUST discard frames [...] that have unknown
 			 * or unsupported types.
@@ -1936,18 +1977,21 @@ static ssize_t h3_rcv_buf(struct qcs *qcs, struct buffer *b, int fin)
 
 	/* Interrupt decoding on stream/connection error detected. */
 	if (h3s->err) {
+		/* TODO Only unimplemented CONNECT reports H3_ERR_REQUEST_REJECTED here. */
+		const int tevt =
+		  (h3s->err == H3_ERR_REQUEST_REJECTED) ? 0 : se_tevt_type_proto_err;
 		qcc_abort_stream_read(qcs);
-		qcc_reset_stream(qcs, h3s->err);
+		qcc_reset_stream(qcs, h3s->err, tevt);
 		total = b_data(b);
 		goto done;
 	}
 	else if (h3c->err) {
-		qcc_set_error(qcs->qcc, h3c->err, 1);
+		qcc_set_error(qcs->qcc, h3c->err, 1, muxc_tevt_type_proto_err);
 		total = b_data(b);
 		goto done;
 	}
 	else if (unlikely(ret < 0)) {
-		qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1);
+		qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1, muxc_tevt_type_internal_err);
 		goto err;
 	}
 
@@ -2882,7 +2926,7 @@ static size_t h3_snd_buf(struct qcs *qcs, struct buffer *buf, size_t count, char
 
 	/* Interrupt sending on fatal error. */
 	if (unlikely(ret < 0)) {
-		qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1);
+		qcc_set_error(qcs->qcc, H3_ERR_INTERNAL_ERROR, 1, muxc_tevt_type_internal_err);
 		goto out;
 	}
 
@@ -3042,12 +3086,48 @@ static int h3_close(struct qcs *qcs, enum qcc_app_ops_close_side side)
 	 */
 	if (qcs == h3c->ctrl_strm || h3s->type == H3S_T_CTRL) {
 		TRACE_ERROR("closure detected on control stream", H3_EV_H3S_END, qcs->qcc->conn, qcs);
-		qcc_set_error(qcs->qcc, H3_ERR_CLOSED_CRITICAL_STREAM, 1);
+		qcc_set_error(qcs->qcc, H3_ERR_CLOSED_CRITICAL_STREAM, 1,
+		              muxc_tevt_type_proto_err);
 		qcc_report_glitch(qcs->qcc, 1);
 		return 1;
 	}
 
 	return 0;
+}
+
+static void h3_lclose(struct qcs *qcs, enum qcc_app_ops_lclose_mode mode)
+{
+	TRACE_ENTER(H3_EV_H3S_END, qcs->qcc->conn, qcs);
+
+	switch (mode) {
+	case QCC_APP_OPS_LCLO_MODE_NORMAL:
+		/* Close stream with FIN. This can only be performed if at
+		 * least HEADERS frame was emitted, or else some clients close
+		 * the connection with H3_FRAME_UNEXPECTED.
+		 */
+		if (qcs->tx.fc.off_soft) {
+			qcs->flags |= QC_SF_FIN_STREAM;
+			qcc_send_stream(qcs, 0, 0);
+		}
+		else {
+			qcc_reset_stream(qcs, 0, se_tevt_type_shutw);
+		}
+		break;
+
+	case QCC_APP_OPS_LCLO_MODE_ABORT:
+		qcc_reset_stream(qcs, H3_ERR_REQUEST_CANCELLED, se_tevt_type_cancelled);
+		break;
+
+	case QCC_APP_OPS_LCLO_MODE_KILL_CONN:
+		qcc_reset_stream(qcs, H3_ERR_EXCESSIVE_LOAD, se_tevt_type_cancelled);
+		if (!(qcs->qcc->flags & (QC_CF_ERR_CONN|QC_CF_ERRL))) {
+			qcc_set_error(qcs->qcc, H3_ERR_EXCESSIVE_LOAD, 1,
+			              muxc_tevt_type_graceful_shut);
+		}
+		break;
+	}
+
+	TRACE_LEAVE(H3_EV_H3S_END, qcs->qcc->conn, qcs);
 }
 
 /* Allocates HTTP/3 stream context relative to <qcs>. If the operation cannot
@@ -3098,14 +3178,14 @@ static int h3_attach(struct qcs *qcs, void *conn_ctx)
 	 * The endpoint SHOULD continue to do so as more requests or
 	 * pushes arrive.
 	 */
-	if (h3c->flags & H3_CF_GOAWAY_SENT && qcs->id >= h3c->id_goaway &&
+	if (h3c->flags & H3_CF_GOAWAY_SENT && qcs->id >= h3c->id_shut_l &&
 	    quic_stream_is_bidi(qcs->id)) {
-		/* Local stack should not attached stream on a closed connection. */
+		/* Local stack should not attach stream to a closed connection. */
 		BUG_ON(quic_stream_is_local(qcs->qcc, qcs->id));
 
-		TRACE_STATE("close stream outside of goaway range", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
+		TRACE_STATE("close stream outside of GOAWAY range", H3_EV_H3S_NEW, qcs->qcc->conn, qcs);
 		qcc_abort_stream_read(qcs);
-		qcc_reset_stream(qcs, H3_ERR_REQUEST_REJECTED);
+		qcc_reset_stream(qcs, H3_ERR_REQUEST_REJECTED, 0);
 	}
 
 	/* TODO support push uni-stream rejection. */
@@ -3140,10 +3220,21 @@ static int h3_send_goaway(struct h3c *h3c)
 	struct qcs *qcs = h3c->ctrl_strm;
 	struct buffer pos, *res;
 	unsigned char data[3 * QUIC_VARINT_MAX_SIZE];
-	size_t frm_len = quic_int_getsize(h3c->id_goaway);
+	uint64_t id_goaway;
+	size_t frm_len;
 	size_t xfer;
 
 	TRACE_ENTER(H3_EV_H3C_END, h3c->qcc->conn);
+
+	/* RFC 9114 5.2. Connection Shutdown
+	 *
+	 * The GOAWAY frame contains an identifier that
+	 * indicates to the receiver the range of requests or pushes that were
+	 * or might be processed in this connection. The server sends a client-
+	 * initiated bidirectional stream ID; the client sends a push ID.
+	 */
+	id_goaway = !conn_is_back(h3c->qcc->conn) ?
+	  h3c->qcc->largest_bidi_r : 0;
 
 	if (!qcs) {
 		TRACE_ERROR("control stream not initialized", H3_EV_H3C_END, h3c->qcc->conn);
@@ -3152,9 +3243,10 @@ static int h3_send_goaway(struct h3c *h3c)
 
 	pos = b_make((char *)data, sizeof(data), 0, 0);
 
+	frm_len = quic_int_getsize(id_goaway);
 	b_quic_enc_int(&pos, H3_FT_GOAWAY, 0);
 	b_quic_enc_int(&pos, frm_len, 0);
-	b_quic_enc_int(&pos, h3c->id_goaway, 0);
+	b_quic_enc_int(&pos, id_goaway, 0);
 
 	res = qcc_get_stream_txbuf(qcs, &err, 0);
 	if (!res || b_room(res) < b_data(&pos) ||
@@ -3167,6 +3259,7 @@ static int h3_send_goaway(struct h3c *h3c)
 	xfer = b_force_xfer(res, &pos, b_data(&pos));
 	qcc_send_stream(qcs, 1, xfer);
 
+	h3c->id_shut_l = id_goaway;
 	h3c->flags |= H3_CF_GOAWAY_SENT;
 	TRACE_LEAVE(H3_EV_H3C_END, h3c->qcc->conn);
 	return 0;
@@ -3175,6 +3268,7 @@ static int h3_send_goaway(struct h3c *h3c)
 	/* Consider GOAWAY as sent even if not really the case. This will
 	 * block future stream opening using H3_REQUEST_REJECTED reset.
 	 */
+	h3c->id_shut_l = id_goaway;
 	h3c->flags |= H3_CF_GOAWAY_SENT;
 	TRACE_DEVEL("leaving in error", H3_EV_H3C_END, h3c->qcc->conn);
 	return 1;
@@ -3199,7 +3293,8 @@ static int h3_init(struct qcc *qcc)
 	h3c->ctrl_strm = NULL;
 	h3c->err = 0;
 	h3c->flags = 0;
-	h3c->id_goaway = 0;
+	h3c->id_shut_l = 0;
+	h3c->id_shut_r = 0;
 
 	qcc->ctx = h3c;
 	h3c->prx_counters = qc_counters(qcc->conn->target, &h3_stats_module);
@@ -3209,7 +3304,7 @@ static int h3_init(struct qcc *qcc)
 	return 1;
 
  fail_no_h3:
-	qcc_set_error(qcc, H3_ERR_INTERNAL_ERROR, 1);
+	qcc_set_error(qcc, H3_ERR_INTERNAL_ERROR, 1, muxc_tevt_type_internal_err);
 	TRACE_DEVEL("leaving on error", H3_EV_H3C_NEW, qcc->conn);
 	return 0;
 }
@@ -3240,7 +3335,8 @@ static int h3_finalize(void *ctx)
 		 */
 		if (qcc_fctl_avail_streams(qcc, 0) < 3) {
 			TRACE_ERROR("peer flow-control limit does not allow control stream creation", H3_EV_H3C_NEW, qcc->conn);
-			qcc_set_error(qcc, H3_ERR_GENERAL_PROTOCOL_ERROR, 1);
+			qcc_set_error(qcc, H3_ERR_GENERAL_PROTOCOL_ERROR, 1,
+			              muxc_tevt_type_other_err);
 			qcc_report_glitch(qcc, 1);
 			goto err;
 		}
@@ -3270,7 +3366,7 @@ static int h3_finalize(void *ctx)
 	 * send data.
 	 */
 	if (h3_control_send(qcs, h3c) < 0) {
-		qcc_set_error(qcc, H3_ERR_INTERNAL_ERROR, 1);
+		qcc_set_error(qcc, H3_ERR_INTERNAL_ERROR, 1, muxc_tevt_type_internal_err);
 		goto err;
 	}
 
@@ -3439,6 +3535,7 @@ const struct qcc_app_ops h3_ops = {
 	.nego_ff     = h3_nego_ff,
 	.done_ff     = h3_done_ff,
 	.close       = h3_close,
+	.lclose      = h3_lclose,
 	.detach      = h3_detach,
 	.shutdown    = h3_shutdown,
 	.inc_err_cnt = h3_stats_inc_err_cnt,

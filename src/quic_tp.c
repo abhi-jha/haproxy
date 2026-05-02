@@ -10,8 +10,6 @@
 #include <haproxy/quic_trace.h>
 #include <haproxy/trace.h>
 
-#define QUIC_MAX_UDP_PAYLOAD_SIZE     2048
-
 static int qc_early_tranport_params_validate(struct quic_conn *qc,
                                              struct quic_transport_params *p,
                                              struct quic_early_transport_params *e);
@@ -53,8 +51,10 @@ void quic_transport_params_init(struct quic_transport_params *p, int server)
 	const uint64_t stream_rx_bufsz = qmux_stream_rx_bufsz();
 	const uint stream_rxbuf = server ?
 	  quic_tune.fe.stream_rxbuf : quic_tune.be.stream_rxbuf;
-	const int max_streams_bidi = server ?
-	  quic_tune.fe.stream_max_concurrent : quic_tune.be.stream_max_concurrent;
+	/* On FE side, check if stream.max-total is set and inferior to stream.max-concurrent */
+	const int max_streams_bidi = server && quic_tune.fe.stream_max_total ?
+	  MIN(quic_tune.fe.stream_max_concurrent, quic_tune.fe.stream_max_total) :
+	  server ? quic_tune.fe.stream_max_concurrent : quic_tune.be.stream_max_concurrent;
 	/* TODO value used to conform with HTTP/3, should be derived from app_ops */
 	const int max_streams_uni = 3;
 

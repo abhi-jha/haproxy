@@ -4,6 +4,7 @@
 
 #include <haproxy/buf-t.h>
 #include <haproxy/obj_type-t.h>
+#include <haproxy/mpring.h>
 
 /* QUIC socket allocation strategy. */
 enum quic_sock_mode {
@@ -17,17 +18,13 @@ struct quic_accept_queue {
 	struct tasklet *tasklet;  /* task responsible to call listener_accept */
 };
 
-/* Buffer used to receive QUIC datagrams on random thread and redispatch them
- * to the connection thread.
- */
-struct quic_receiver_buf {
-	struct buffer buf; /* storage for datagrams received. */
-	struct list dgram_list; /* datagrams received with this rxbuf. */
-	struct mt_list rxbuf_el; /* list element into receiver.rxbuf_list. */
-};
-
 #define QUIC_DGRAM_FL_REJECT			0x00000001
 #define QUIC_DGRAM_FL_SEND_RETRY		0x00000002
+
+union sockaddr_in46 {
+	struct sockaddr_in in4;
+	struct sockaddr_in6 in6;
+};
 
 /* QUIC datagram */
 struct quic_dgram {
@@ -35,21 +32,18 @@ struct quic_dgram {
 	void *owner;
 	unsigned char *buf;
 	size_t len;
-	unsigned char *dcid;
+	size_t dcid_off;
 	size_t dcid_len;
-	struct sockaddr_storage saddr;
-	struct sockaddr_storage daddr;
+	union sockaddr_in46 saddr;
+	union sockaddr_in46 daddr;
 	struct quic_conn *qc;
-
-	struct list recv_list; /* element pointing to quic_receiver_buf <dgram_list>. */
-	struct mt_list handler_list; /* element pointing to quic_dghdlr <dgrams>. */
 
 	int flags; /* QUIC_DGRAM_FL_* values */
 };
 
 /* QUIC datagram handler */
 struct quic_dghdlr {
-	struct mt_list dgrams;
+	struct mpring buf;      /* MPSC ring buffer for datagrams. */
 	struct tasklet *task;
 };
 

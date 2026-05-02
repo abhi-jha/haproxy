@@ -106,7 +106,7 @@ static void
 comp_prepare_compress_request(struct comp_state *st, struct stream *s, struct http_msg *msg)
 {
 	struct htx *htx = htxbuf(&msg->chn->buf);
-	struct http_txn *txn = s->txn;
+	struct http_txn *txn = s->txn.http;
 	struct http_hdr_ctx ctx;
 	struct comp_type *comp_type;
 	unsigned int comp_minsize = 0;
@@ -261,7 +261,7 @@ static int
 comp_res_http_post_analyze(struct stream *s, struct filter *filter,
                            struct channel *chn, unsigned an_bit)
 {
-	struct http_txn   *txn = s->txn;
+	struct http_txn   *txn = s->txn.http;
 	struct http_msg   *msg = &txn->rsp;
 	struct comp_state *st  = filter->ctx;
 
@@ -453,7 +453,7 @@ set_compression_header(struct comp_state *st, struct stream *s, struct http_msg 
 
 	/* add "Transfer-Encoding: chunked" header */
 	if (!(msg->flags & HTTP_MSGF_TE_CHNK)) {
-		if (!http_add_header(htx, ist("Transfer-Encoding"), ist("chunked")))
+		if (!http_add_header(htx, ist("Transfer-Encoding"), ist("chunked"), 0))
 			goto error;
 		msg->flags |= HTTP_MSGF_TE_CHNK;
 		sl->flags |= (HTX_SL_F_XFER_ENC|HTX_SL_F_CHNK);
@@ -477,7 +477,7 @@ set_compression_header(struct comp_state *st, struct stream *s, struct http_msg 
 			if (istcat(&v, ist("W/"), trash.size) == -1 || istcat(&v, ctx.value, trash.size) == -1)
 				goto error;
 
-			if (!http_replace_header_value(htx, &ctx, v))
+			if (!http_replace_header_value(htx, &ctx, v, 0))
 				goto error;
 		}
 	}
@@ -494,7 +494,7 @@ set_compression_header(struct comp_state *st, struct stream *s, struct http_msg 
 	if (ctx.blk == NULL) {
 		if (last_vary.blk == NULL) {
 			/* No Vary header found at all. Add our header */
-			if (!http_add_header(htx, ist("Vary"), ist("Accept-Encoding")))
+			if (!http_add_header(htx, ist("Vary"), ist("Accept-Encoding"), 0))
 				goto error;
 		}
 		else  {
@@ -515,7 +515,7 @@ set_compression_header(struct comp_state *st, struct stream *s, struct http_msg 
 	if (comp_algo->cfg_name_len != 8 || memcmp(comp_algo->cfg_name, "identity", 8) != 0) {
 		struct ist v = ist2(comp_algo->ua_name, comp_algo->ua_name_len);
 
-		if (!http_add_header(htx, ist("Content-Encoding"), v))
+		if (!http_add_header(htx, ist("Content-Encoding"), v, 0))
 			goto error;
 	}
 
@@ -648,7 +648,7 @@ static int
 select_compression_response_header(struct comp_state *st, struct stream *s, struct http_msg *msg)
 {
 	struct htx *htx = htxbuf(&msg->chn->buf);
-	struct http_txn *txn = s->txn;
+	struct http_txn *txn = s->txn.http;
 	struct http_hdr_ctx ctx;
 	struct comp_type *comp_type;
 	unsigned int comp_minsize = 0;
@@ -997,7 +997,7 @@ parse_compression_options(char **args, int section, struct proxy *proxy,
 			comp->flags &= ~COMP_FL_DIR_RES;
 			comp->flags |= COMP_FL_DIR_REQ;
 		} else if (strcmp(args[2], "response") == 0) {
-			comp->flags &= COMP_FL_DIR_REQ;
+			comp->flags &= ~COMP_FL_DIR_REQ;
 			comp->flags |= COMP_FL_DIR_RES;
 		} else if (strcmp(args[2], "both") == 0)
 			comp->flags |= COMP_FL_DIR_REQ | COMP_FL_DIR_RES;
@@ -1195,7 +1195,7 @@ static int
 smp_fetch_res_comp(const struct arg *args, struct sample *smp, const char *kw,
 		   void *private)
 {
-	struct http_txn *txn = smp->strm ? smp->strm->txn : NULL;
+	struct http_txn *txn = smp->strm ? smp->strm->txn.http : NULL;
 
 	smp->data.type = SMP_T_BOOL;
 	smp->data.u.sint = (txn && (txn->rsp.flags & HTTP_MSGF_COMPRESSING));
@@ -1209,7 +1209,7 @@ static int
 smp_fetch_res_comp_algo(const struct arg *args, struct sample *smp,
 			const char *kw, void *private)
 {
-	struct http_txn   *txn = smp->strm ? smp->strm->txn : NULL;
+	struct http_txn   *txn = smp->strm ? smp->strm->txn.http : NULL;
 	struct filter     *filter;
 	struct comp_state *st;
 

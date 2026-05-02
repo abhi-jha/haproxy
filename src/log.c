@@ -334,7 +334,8 @@ char default_tcp_log_format[] = "%ci:%cp [%t] %ft %b/%s %Tw/%Tc/%Tt %B %ts %ac/%
 char clf_tcp_log_format[] = "%{+Q}o %{-Q}ci - - [%T] \"TCP \" 000 %B \"\" \"\" %cp %ms %ft %b %s %Th %Tw %Tc %Tt %U %ts-- %ac %fc %bc %sc %rc %sq %bq \"\" \"\" ";
 char *log_format = NULL;
 
-char keylog_format_bc[] = "CLIENT_EARLY_TRAFFIC_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_client_early_traffic_secret]\n"
+char keylog_format_bc[] = "CLIENT_RANDOM %[ssl_bc_client_random,hex]  %[ssl_bc_session_key,hex]\n"
+                          "CLIENT_EARLY_TRAFFIC_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_client_early_traffic_secret]\n"
                           "CLIENT_HANDSHAKE_TRAFFIC_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_client_handshake_traffic_secret]\n"
                           "SERVER_HANDSHAKE_TRAFFIC_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_server_handshake_traffic_secret]\n"
                           "CLIENT_TRAFFIC_SECRET_0 %[ssl_bc_client_random,hex] %[ssl_bc_client_traffic_secret_0]\n"
@@ -342,7 +343,8 @@ char keylog_format_bc[] = "CLIENT_EARLY_TRAFFIC_SECRET %[ssl_bc_client_random,he
                           "EXPORTER_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_exporter_secret]\n"
                           "EARLY_EXPORTER_SECRET %[ssl_bc_client_random,hex] %[ssl_bc_early_exporter_secret]";
 
-char keylog_format_fc[] = "CLIENT_EARLY_TRAFFIC_SECRET %[ssl_fc_client_random,hex] %[ssl_fc_client_early_traffic_secret]\n"
+char keylog_format_fc[] = "CLIENT_RANDOM %[ssl_fc_client_random,hex] %[ssl_fc_session_key,hex]\n"
+                          "CLIENT_EARLY_TRAFFIC_SECRET %[ssl_fc_client_random,hex] %[ssl_fc_client_early_traffic_secret]\n"
                           "CLIENT_HANDSHAKE_TRAFFIC_SECRET %[ssl_fc_client_random,hex] %[ssl_fc_client_handshake_traffic_secret]\n"
                           "SERVER_HANDSHAKE_TRAFFIC_SECRET %[ssl_fc_client_random,hex] %[ssl_fc_server_handshake_traffic_secret]\n"
                           "CLIENT_TRAFFIC_SECRET_0 %[ssl_fc_client_random,hex] %[ssl_fc_client_traffic_secret_0]\n"
@@ -671,13 +673,13 @@ static int add_sample_to_logformat_list(char *text, char *name, int name_len, in
 
 	if (!(expr->fetch->val & cap)) {
 		memprintf(err, "sample fetch <%s> may not be reliably used here because it needs '%s' which is not available here",
-		          text, sample_src_names(expr->fetch->use));
+		          expr->fetch->kw, sample_src_names(expr->fetch->use));
 		goto error_free;
 	}
 
 	if ((options & LOG_OPT_HTTP) && (expr->fetch->use & (SMP_USE_L6REQ|SMP_USE_L6RES))) {
 		ha_warning("parsing [%s:%d] : L6 sample fetch <%s> ignored in HTTP log-format string.\n",
-			   lf_expr->conf.file, lf_expr->conf.line, text);
+			   lf_expr->conf.file, lf_expr->conf.line, expr->fetch->kw);
 	}
 
 	LIST_APPEND(list_format, &node->list);
@@ -1110,6 +1112,14 @@ int lf_expr_postcheck(struct lf_expr *lf_expr, struct proxy *px, char **err)
 			px->to_log |= LW_XPRT;
 			if (px->http_needed)
 				px->to_log |= LW_REQ;
+
+			/* anything involving the response needs to happen at response time */
+			if (expr->fetch->use & (SMP_USE_HRSHP|SMP_USE_HRSHV|SMP_USE_HRSBO))
+				px->to_log |= LW_RESP;
+
+			/* anything involving the end of the response needs to happen after final bytes */
+			if (expr->fetch->use & (SMP_USE_HRSBO|SMP_USE_RQFIN|SMP_USE_RSFIN|SMP_USE_TXFIN|SMP_USE_SSFIN))
+				px->to_log |= LW_BYTES;
 		}
 		else if (lf->type == LOG_FMT_ALIAS) {
 			if (!default_px && !http_mode &&
@@ -3879,14 +3889,38 @@ int lf_expr_dup(const struct lf_expr *orig, struct lf_expr *dest)
 	return 0;
 }
 
+/* Generates a unique ID based on the given <format> and stores it
+ * in <dst>. <dst> must be IST_NULL when this function is called.
+ *
+ * If this function fails to allocate memory IST_NULL is stored.
+ */
+void generate_unique_id(struct ist *dst, struct session *sess, struct stream *strm, struct lf_expr *format)
+{
+	char *unique_id;
+
+	BUG_ON(isttest(*dst));
+
+	unique_id = pool_alloc(pool_head_uniqueid);
+	if (unique_id == NULL) {
+		*dst = IST_NULL;
+		return;
+	}
+
+	/* Initialize <dst> to an empty string to prevent infinite
+	 * recursion when the <format> references %[unique-id] or %ID.
+	 */
+	*dst = ist2(unique_id, 0);
+	dst->len = sess_build_logline(sess, strm, unique_id, UNIQUEID_LEN, format);
+}
+
 /* Builds a log line in <dst> based on <lf_expr>, and stops before reaching
  * <maxsize> characters. Returns the size of the output string in characters,
  * not counting the trailing zero which is always added if the resulting size
  * is not zero. It requires a valid session and optionally a stream. If the
  * stream is NULL, default values will be assumed for the stream part.
  */
-int sess_build_logline_orig(struct session *sess, struct stream *s,
-                            char *dst, size_t maxsize, struct lf_expr *lf_expr,
+size_t sess_build_logline_orig(struct session *sess, struct stream *s,
+                            char *dst, size_t maxsize, const struct lf_expr *lf_expr,
                             struct log_orig log_orig)
 {
 	struct lf_buildctx _ctx = {};
@@ -3896,7 +3930,7 @@ int sess_build_logline_orig(struct session *sess, struct stream *s,
 	struct http_txn *txn;
 	const struct strm_logs *logs;
 	struct connection *fe_conn, *be_conn;
-	struct list *list_format = &lf_expr->nodes.list;
+	const struct list *list_format = &lf_expr->nodes.list;
 	unsigned int s_flags;
 	unsigned int uniq_id;
 	struct buffer chunk;
@@ -3925,7 +3959,7 @@ int sess_build_logline_orig(struct session *sess, struct stream *s,
 
 	if (likely(s)) {
 		be = s->be;
-		txn = s->txn;
+		txn = (((s->flags & SF_TXN_MASK) == SF_TXN_HTTP) ? s->txn.http : NULL);
 		be_conn = sc_conn(s->scb);
 		status = (txn ? txn->status : 0);
 		s_flags = s->flags;
@@ -5147,20 +5181,18 @@ int sess_build_logline_orig(struct session *sess, struct stream *s,
 				break;
 
 			case LOG_FMT_UNIQUEID: // %ID
-				ret = NULL;
-				if (s) {
-					/* if unique-id was not generated */
-					if (!isttest(s->unique_id) && !lf_expr_isempty(&sess->fe->format_unique_id)) {
-						stream_generate_unique_id(s, &sess->fe->format_unique_id);
-					}
-					ret = lf_text_len(tmplog, s->unique_id.ptr, s->unique_id.len, maxsize - (tmplog - dst), ctx);
-				}
-				else
-					ret = lf_text_len(tmplog, NULL, 0, maxsize - (tmplog - dst), ctx);
+			{
+				struct ist unique_id = IST_NULL;
+
+				if (s && !lf_expr_isempty(&sess->fe->format_unique_id))
+					unique_id = stream_generate_unique_id(s, &sess->fe->format_unique_id);
+
+				ret = lf_text_len(tmplog, istptr(unique_id), istlen(unique_id), maxsize - (tmplog - dst), ctx);
 				if (ret == NULL)
 					goto out;
 				tmplog = ret;
 				break;
+			}
 
 			case LOG_FMT_ORIGIN: // %OG
 				ret = lf_text(tmplog, log_orig_to_str(log_orig.id),
@@ -5229,8 +5261,8 @@ static void do_log_ctx(struct process_send_log_ctx *ctx)
 	struct stream *s = ctx->stream;
 	struct session *sess = ctx->sess;
 	struct log_orig origin = ctx->origin;
-	int size;
-	int sd_size = 0;
+	size_t size;
+	size_t sd_size = 0;
 	int level = -1;
 
 	if (LIST_ISEMPTY(&sess->fe->loggers))
@@ -5291,14 +5323,15 @@ void strm_log(struct stream *s, struct log_orig origin)
 {
 	struct process_send_log_ctx ctx;
 	struct session *sess = s->sess;
-	int size, err, level;
-	int sd_size = 0;
+	int err, level;
+	size_t size;
+	size_t sd_size = 0;
 
 	/* if we don't want to log normal traffic, return now */
 	err = (s->flags & SF_REDISP) ||
               ((s->flags & SF_ERR_MASK) > SF_ERR_LOCAL) ||
 	      (((s->flags & SF_ERR_MASK) == SF_ERR_NONE) && s->conn_retries) ||
-	      ((sess->fe->mode == PR_MODE_HTTP) && s->txn && s->txn->status >= 500) ||
+	      ((sess->fe->mode == PR_MODE_HTTP) && s->txn.http && s->txn.http->status >= 500) ||
 	      (origin.flags & LOG_ORIG_FL_ERROR);
 
 	if (!err && (sess->fe->options2 & PR_O2_NOLOGNORM))
@@ -5353,8 +5386,9 @@ void strm_log(struct stream *s, struct log_orig origin)
 void _sess_log(struct session *sess, int embryonic)
 {
 	struct process_send_log_ctx ctx;
-	int size, level;
-	int sd_size = 0;
+	int level;
+	size_t size;
+	size_t sd_size = 0;
 	struct log_orig orig;
 
 	if (!sess)
@@ -6172,7 +6206,7 @@ int cfg_parse_log_forward(const char *file, int linenum, char **args, int kwm)
 		bind_conf->accept = session_accept_fd;
 
 		if (!str2listener(args[1], cfg_log_forward, bind_conf, file, linenum, &errmsg)) {
-			if (errmsg && *errmsg) {
+			if (errmsg) {
 				indent_msg(&errmsg, 2);
 				ha_alert("parsing [%s:%d] : '%s %s' : %s\n", file, linenum, args[0], args[1], errmsg);
 			}
@@ -6214,7 +6248,7 @@ int cfg_parse_log_forward(const char *file, int linenum, char **args, int kwm)
 		bind_conf->maxaccept = global.tune.maxaccept ? global.tune.maxaccept : MAX_ACCEPT;
 
 		if (!str2receiver(args[1], cfg_log_forward, bind_conf, file, linenum, &errmsg)) {
-			if (errmsg && *errmsg) {
+			if (errmsg) {
 				indent_msg(&errmsg, 2);
 				ha_alert("parsing [%s:%d] : '%s %s' : %s\n", file, linenum, args[0], args[1], errmsg);
 			}
@@ -6238,7 +6272,7 @@ int cfg_parse_log_forward(const char *file, int linenum, char **args, int kwm)
 			ret = kw->parse(args, cur_arg, cfg_log_forward, bind_conf, &errmsg);
 			err_code |= ret;
 			if (ret) {
-				if (errmsg && *errmsg) {
+				if (errmsg) {
 					indent_msg(&errmsg, 2);
 					ha_alert("parsing [%s:%d] : %s\n", file, linenum, errmsg);
 				}
@@ -7007,7 +7041,7 @@ enum act_parse_ret do_log_parse_act(enum log_orig_id id,
 	rule->arg.do_log.orig = id;
 
 	while (*args[*orig_arg]) {
-		if (!strcmp(args[*orig_arg], "profile")) {
+		if (strcmp(args[*orig_arg], "profile") == 0) {
 			if (!*args[*orig_arg + 1]) {
 				memprintf(err,
 					  "action '%s': 'profile' expects argument.",

@@ -4,6 +4,7 @@
 #include <haproxy/buf.h>
 #include <haproxy/cfgparse.h>
 #include <haproxy/chunk.h>
+#include <haproxy/compat.h>
 #include <haproxy/global.h>
 #include <haproxy/hstream-t.h>
 #include <haproxy/http_htx.h>
@@ -32,7 +33,7 @@ DECLARE_TYPED_POOL(pool_head_hstream, "hstream", struct hstream);
 #define HS_ST_OPT_CHUNK_RES     0x0080 /* chunk-encoded response (?k=1) */
 #define HS_ST_OPT_REQ_AFTER_RES 0x0100 /* drain the request payload after the response (?A=1) */
 #define HS_ST_OPT_RANDOM_RES    0x0200 /* random response (?R=1) */
-#define HS_ST_OPT_NO_CACHE      0x0400 /* non-cacheable resposne (?c=0) */
+#define HS_ST_OPT_NO_CACHE      0x0400 /* non-cacheable response (?c=0) */
 #define HS_ST_OPT_NO_SPLICING   0x0800 /* no splicing (?S=1) */
 
 const char *HTTP_HELP =
@@ -63,10 +64,14 @@ const char *HTTP_HELP =
         " -  GET /?r=500?s=0?c=0?t=1000 HTTP/1.0\n"
         "\n";
 
-char common_response[RESPSIZE];
-char common_chunk_resp[RESPSIZE];
-char *random_resp;
-int random_resp_len = RESPSIZE;
+/* Size in bytes of the prebuilts response buffers */
+#define RESPSIZE 16384
+/* Number of bytes by body response line */
+#define HS_COMMON_RESPONSE_LINE_SZ 50
+static char common_response[RESPSIZE];
+static char common_chunk_resp[RESPSIZE];
+static char *random_resp;
+static int random_resp_len = RESPSIZE;
 
 #if defined(USE_LINUX_SPLICE)
 struct pipe *master_pipe = NULL;
@@ -318,7 +323,7 @@ static int hstream_ff_snd(struct connection *conn, struct hstream *hs)
 	struct sedesc *sd = hs->sc->sedesc;
 	int ret = 0;
 
-	/* First try to resume FF*/
+	/* First try to resume FF */
 	if (se_have_ff_data(sd)) {
 		ret = CALL_MUX_WITH_RET(conn->mux, resume_fastfwd(hs->sc, 0));
 		if (ret > 0)
@@ -328,6 +333,7 @@ static int hstream_ff_snd(struct connection *conn, struct hstream *hs)
 	nego_flags |= NEGO_FF_FL_EXACT_SIZE;
 #if defined(USE_LINUX_SPLICE)
 	if ((global.tune.options & GTUNE_USE_SPLICE) &&
+	    master_pipe &&
 	    !(sd->iobuf.flags & IOBUF_FL_NO_SPLICING) &&
 	    !(hs->flags & HS_ST_OPT_NO_SPLICING))
 		nego_flags |= NEGO_FF_FL_MAY_SPLICE;
@@ -344,6 +350,7 @@ static int hstream_ff_snd(struct connection *conn, struct hstream *hs)
 
 #if defined(USE_LINUX_SPLICE)
 	if (sd->iobuf.pipe) {
+		BUG_ON(master_pipesize == 0 || master_pipe == NULL);
 		if (len > master_pipesize)
 			len = master_pipesize;
 		ret = tee(master_pipe->cons, sd->iobuf.pipe->prod, len, SPLICE_F_NONBLOCK);
@@ -363,7 +370,7 @@ static int hstream_ff_snd(struct connection *conn, struct hstream *hs)
   done:
 	if (se_done_ff(sd) != 0 || !(sd->iobuf.flags & (IOBUF_FL_FF_BLOCKED|IOBUF_FL_FF_WANT_ROOM))) {
 		/* Something was forwarding or the consumer states it is not
-		 * blocked anyore, don't reclaim more room */
+		 * blocked anymore, don't reclaim more room */
 	}
 
 	if (se_have_ff_data(sd)) {
@@ -469,7 +476,7 @@ static int hstream_build_http_help_resp(struct hstream *hs)
 		goto err;
 	}
 
-	if (!htx_add_data_atonce(htx, ist2(HTTP_HELP, strlen(HTTP_HELP)))) {
+	if (!htx_add_data_atonce(htx, ist(HTTP_HELP))) {
 		TRACE_ERROR("unable to add payload to HTX message", HS_EV_HSTRM_SEND, hs);
 		goto err;
 	}
@@ -509,7 +516,7 @@ static int hstream_build_http_100_continue_resp(struct hstream *hs)
 
 	htx = htx_from_buf(buf);
 	sl = htx_add_stline(htx, HTX_BLK_RES_SL, flags, ist("HTTP/1.1"),
-						ist("100-continue"), IST_NULL);
+			    ist("100"), ist("continue"));
 	if (!sl) {
 		TRACE_ERROR("could not add HTX start line", HS_EV_HSTRM_SEND, hs);
 		goto err;
@@ -1053,7 +1060,7 @@ static struct task *process_hstream(struct task *t, void *context, unsigned int 
 
  send_done:
 		if (hs->req_body && (hs->flags & HS_ST_OPT_REQ_AFTER_RES) && !hs->to_write) {
-			/* Response sending has just complete. The body will be drained upon
+			/* Response sending has just completed. The body will be drained upon
 			 * next wakeup.
 			 */
 			TRACE_STATE("waking up task", HS_EV_HSTRM_IO_CB, hs);
@@ -1163,3 +1170,95 @@ void *hstream_new(struct session *sess, struct stconn *sc, struct buffer *input)
 	TRACE_DEVEL("leaving on error", HS_EV_HSTRM_NEW);
 	return NULL;
 }
+
+/* Build the response buffers.
+ * Return 1 if succeeded, -1 if failed.
+ */
+static int hstream_build_responses(void)
+{
+	int i;
+
+	for (i = 0; i < sizeof(common_response); i++) {
+		if (i % HS_COMMON_RESPONSE_LINE_SZ == HS_COMMON_RESPONSE_LINE_SZ - 1)
+			common_response[i] = '\n';
+		else if (i % 10 == 0)
+			common_response[i] = '.';
+		else
+			common_response[i] = '0' + i % 10;
+	}
+
+	/* original haterm chunk mode responses are made of 1-byte chunks
+	 * but the haproxy muxes do not support this. At this time
+	 * these responses are handled the same way as for common
+	 * responses with a pre-built buffer.
+	 */
+	for (i = 0; i < sizeof(common_chunk_resp); i++)
+		common_chunk_resp[i] = '1';
+
+	random_resp = malloc(random_resp_len);
+	if (!random_resp) {
+		ha_alert("not enough memory...\n");
+		return -1;
+	}
+
+	for (i = 0; i < random_resp_len; i++)
+		random_resp[i] = ha_random32() >> 16;
+
+	return 1;
+}
+
+#if defined(USE_LINUX_SPLICE)
+static void hstream_init_splicing(void)
+{
+	unsigned int pipesize = 65536;
+
+	if (!(global.tune.options & GTUNE_USE_SPLICE) || !global.maxpipes)
+		return;
+
+	if (global.tune.pipesize)
+		pipesize = global.tune.pipesize;
+
+	master_pipe = get_pipe();
+	if (master_pipe) {
+		struct iovec v = { .iov_base = common_response,
+				   .iov_len = sizeof(common_response) };
+		int total, ret;
+
+#ifdef F_SETPIPE_SZ
+                fcntl(master_pipe->cons, F_SETPIPE_SZ, pipesize * 5 / 4);
+#endif
+		total = ret = 0;
+		do {
+			ret = vmsplice(master_pipe->prod, &v, 1, SPLICE_F_NONBLOCK);
+			if (ret > 0)
+				total += ret;
+		} while (ret > 0 && total < pipesize);
+		master_pipesize = total;
+
+		if (master_pipesize < pipesize) {
+			if (master_pipesize < 60*1024) {
+				/* Older kernels were limited to around 60-61 kB */
+				ha_warning("Failed to vmsplice haterm master pipe after %lu bytes, splicing disabled for haterm\n", (ulong)master_pipesize);
+				put_pipe(master_pipe);
+				master_pipe = NULL;
+				master_pipesize = 0;
+			}
+			else
+				ha_warning("Splicing in haterm is limited to %lu bytes (too old kernel)\n", (ulong)master_pipesize);
+		}
+	}
+	else
+		ha_warning("Unable to allocate haterm master pipe for splicing, splicing disabled for haterm\n");
+}
+
+static void hstream_deinit(void)
+{
+	if (master_pipe)
+		put_pipe(master_pipe);
+}
+
+REGISTER_POST_DEINIT(hstream_deinit);
+INITCALL0(STG_INIT_2, hstream_init_splicing);
+#endif
+
+REGISTER_POST_CHECK(hstream_build_responses);

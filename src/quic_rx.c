@@ -37,7 +37,6 @@
 #include <haproxy/trace.h>
 
 DECLARE_POOL(pool_head_quic_conn_rxbuf, "quic_conn_rxbuf", QUIC_CONN_RX_BUFSZ);
-DECLARE_TYPED_POOL(pool_head_quic_dgram, "quic_dgram", struct quic_dgram);
 DECLARE_TYPED_POOL(pool_head_quic_rx_packet, "quic_rx_packet", struct quic_rx_packet);
 
 /* Decode an expected packet number from <truncated_on> its truncated value,
@@ -642,7 +641,7 @@ static int qc_handle_strm_frm(struct quic_rx_packet *pkt,
 	ret = qcc_recv(qc->qcc, strm_frm->id, strm_frm->len,
 	               strm_frm->offset, fin, (char *)strm_frm->data);
 
-	/* frame rejected - packet must not be acknowledeged */
+	/* frame rejected - packet must not be acknowledged */
 	TRACE_LEAVE(QUIC_EV_CONN_PRSFRM, qc);
 	return !ret;
 }
@@ -1754,7 +1753,7 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 	prx = l->bind_conf->frontend;
 	prx_counters = EXTRA_COUNTERS_GET(prx->extra_counters_fe, &quic_stats_module);
 
-	qc = retrieve_qc_conn_from_cid(pkt, &dgram->saddr, new_tid);
+	qc = retrieve_qc_conn_from_cid(pkt, (struct sockaddr_storage *)&dgram->saddr, new_tid);
 
 	/* quic_conn must be set to NULL if bind on another thread. */
 	BUG_ON_HOT(qc && *new_tid != -1);
@@ -1789,7 +1788,7 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 				/* Validate the token, retry or not only when connection is unknown. */
 				if (!quic_token_validate(pkt, dgram, l, qc, &token_odcid)) {
 					if (dgram->flags & QUIC_DGRAM_FL_SEND_RETRY) {
-						if (send_retry(l->rx.fd, &dgram->saddr, pkt, pkt->version)) {
+						if (send_retry(l->rx.fd, (struct sockaddr_storage *)&dgram->saddr, pkt, pkt->version)) {
 							TRACE_ERROR("Error during Retry generation",
 							            QUIC_EV_CONN_LPKT, NULL, NULL, NULL, pkt->version);
 						}
@@ -1819,7 +1818,7 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 
 					TRACE_PROTO("Initial without token, sending retry",
 						    QUIC_EV_CONN_LPKT, NULL, NULL, NULL, pkt->version);
-					if (send_retry(l->rx.fd, &dgram->saddr, pkt, pkt->version)) {
+					if (send_retry(l->rx.fd, (struct sockaddr_storage *)&dgram->saddr, pkt, pkt->version)) {
 						TRACE_ERROR("Error during Retry generation",
 							    QUIC_EV_CONN_LPKT, NULL, NULL, NULL, pkt->version);
 						goto out;
@@ -1851,7 +1850,7 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 				goto err;
 			}
 
-			if (quic_cid_derive_from_odcid(conn_id, &pkt->dcid, &pkt->saddr)) {
+			if (quic_cid_derive_from_odcid(conn_id, &pkt->dcid, (struct sockaddr_storage *)&pkt->saddr)) {
 				TRACE_ERROR("error on CID generation",
 				            QUIC_EV_CONN_LPKT, NULL, NULL, NULL, pkt->version);
 				pool_free(pool_head_quic_connection_id, conn_id);
@@ -1869,8 +1868,9 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 				pool_free(pool_head_quic_connection_id, conn_id);
 			}
 			else {
-				qc = qc_new_conn(l, pkt, &token_odcid,
-				                 NULL, conn_id, &dgram->daddr, &pkt->saddr);
+				qc = qc_new_conn(l, pkt, &token_odcid, NULL, conn_id,
+				                 (struct sockaddr_storage *)&dgram->daddr,
+				                 (struct sockaddr_storage *)&pkt->saddr);
 				if (qc == NULL) {
 					quic_cid_delete(conn_id); /* Removes CID from global tree as it points to a NULL qc. */
 					pool_free(pool_head_quic_connection_id, conn_id);
@@ -1897,7 +1897,7 @@ static struct quic_conn *quic_rx_pkt_retrieve_conn(struct quic_rx_packet *pkt,
 		 * emits stateless_reset_token in its TPs.
 		 */
 		TRACE_PROTO("RX non Initial pkt without connection", QUIC_EV_CONN_LPKT, NULL, NULL, NULL, pkt->version);
-		if (!send_stateless_reset(l, &dgram->saddr, pkt))
+		if (!send_stateless_reset(l, (struct sockaddr_storage *)&dgram->saddr, pkt))
 			TRACE_ERROR("stateless reset not sent", QUIC_EV_CONN_LPKT, qc);
 		goto err;
 	}
@@ -1978,7 +1978,7 @@ static int quic_rx_pkt_parse(struct quic_conn *qc, struct quic_rx_packet *pkt,
 		 */
 		if (!(pkt->flags & QUIC_FL_RX_PACKET_DGRAM_FIRST) &&
 		    (pkt->dcid.len != dgram->dcid_len ||
-		     memcmp(dgram->dcid, pkt->dcid.data, pkt->dcid.len))) {
+		     memcmp(dgram->buf + dgram->dcid_off, pkt->dcid.data, pkt->dcid.len))) {
 			TRACE_PROTO("Packet dropped", QUIC_EV_CONN_LPKT);
 			goto drop;
 		}
@@ -1994,7 +1994,7 @@ static int quic_rx_pkt_parse(struct quic_conn *qc, struct quic_rx_packet *pkt,
 		 */
 		if (l && !pkt->version) {
 			 /* unsupported version, send Negotiation packet */
-			if (send_version_negotiation(l->rx.fd, &dgram->saddr, pkt)) {
+			if (send_version_negotiation(l->rx.fd, (struct sockaddr_storage *)&dgram->saddr, pkt)) {
 				TRACE_ERROR("VN packet not sent", QUIC_EV_CONN_LPKT);
 				goto drop_silent;
 			}
@@ -2185,7 +2185,7 @@ static int quic_rx_pkt_parse(struct quic_conn *qc, struct quic_rx_packet *pkt,
 		 */
 		if (!(pkt->flags & QUIC_FL_RX_PACKET_DGRAM_FIRST) &&
 		    (pkt->dcid.len != dgram->dcid_len ||
-		     memcmp(dgram->dcid, pkt->dcid.data, pkt->dcid.len))) {
+		     memcmp(dgram->buf + dgram->dcid_off, pkt->dcid.data, pkt->dcid.len))) {
 			TRACE_PROTO("RX pkt dropped", QUIC_EV_CONN_LPKT);
 			goto drop;
 		}
@@ -2462,9 +2462,7 @@ int quic_dgram_parse(struct quic_dgram *dgram, struct quic_conn *from_qc,
 			if (!qc) {
 				if (new_tid >= 0) {
 					TRACE_STATE("re-enqueue packet to conn thread", QUIC_EV_CONN_LPKT);
-					MT_LIST_APPEND(&quic_dghdlrs[new_tid].dgrams,
-					               &dgram->handler_list);
-					tasklet_wakeup(quic_dghdlrs[new_tid].task);
+					quic_dgram_requeue(dgram, new_tid);
 					pool_free(pool_head_quic_rx_packet, pkt);
 					goto out;
 				}
@@ -2492,8 +2490,10 @@ int quic_dgram_parse(struct quic_dgram *dgram, struct quic_conn *from_qc,
 		}
 
 		/* Detect QUIC connection migration. */
-		if (li && ipcmp(&qc->peer_addr, &dgram->saddr, 1)) {
-			if (qc_handle_conn_migration(qc, &dgram->saddr, &dgram->daddr)) {
+		if (li && ipcmp(&qc->peer_addr, (struct sockaddr_storage *)&dgram->saddr, 1)) {
+			if (qc_handle_conn_migration(qc,
+			    (struct sockaddr_storage *)&dgram->saddr,
+			    (struct sockaddr_storage *)&dgram->daddr)) {
 				/* Skip the entire datagram. */
 				TRACE_ERROR("error during connection migration, datagram dropped", QUIC_EV_CONN_LPKT, qc);
 				pkt->len = end - pos;
@@ -2523,16 +2523,12 @@ int quic_dgram_parse(struct quic_dgram *dgram, struct quic_conn *from_qc,
 	/* This must never happen. */
 	BUG_ON(pos > end);
 	BUG_ON(pos < end || pos > dgram->buf + dgram->len);
-	/* Mark this datagram as consumed */
-	HA_ATOMIC_STORE(&dgram->buf, NULL);
 
  out:
 	TRACE_LEAVE(QUIC_EV_CONN_LPKT);
 	return 0;
 
  err:
-	/* Mark this datagram as consumed as maybe at least some packets were parsed. */
-	HA_ATOMIC_STORE(&dgram->buf, NULL);
 	TRACE_LEAVE(QUIC_EV_CONN_LPKT);
 	return -1;
 }

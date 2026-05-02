@@ -69,7 +69,7 @@ def aws_lc_version_string_to_num(version_string):
     return tuple(map(int, version_string[1:].split('.')))
 
 def aws_lc_version_valid(version_string):
-    return re.match('^v[0-9]+(\.[0-9]+)*$', version_string)
+    return re.match(r'^v[0-9]+(\.[0-9]+)*$', version_string)
 
 @functools.lru_cache(5)
 def determine_latest_aws_lc(ssl):
@@ -86,7 +86,7 @@ def aws_lc_fips_version_string_to_num(version_string):
     return tuple(map(int, version_string[12:].split('.')))
 
 def aws_lc_fips_version_valid(version_string):
-    return re.match('^AWS-LC-FIPS-[0-9]+(\.[0-9]+)*$', version_string)
+    return re.match(r'^AWS-LC-FIPS-[0-9]+(\.[0-9]+)*$', version_string)
 
 @functools.lru_cache(5)
 def determine_latest_aws_lc_fips(ssl):
@@ -103,7 +103,7 @@ def wolfssl_version_string_to_num(version_string):
     return tuple(map(int, version_string[1:].removesuffix('-stable').split('.')))
 
 def wolfssl_version_valid(version_string):
-    return re.match('^v[0-9]+(\.[0-9]+)*-stable$', version_string)
+    return re.match(r'^v[0-9]+(\.[0-9]+)*-stable$', version_string)
 
 @functools.lru_cache(5)
 def determine_latest_wolfssl(ssl):
@@ -145,9 +145,11 @@ def main(ref_name):
     if is_stable:
         os = "ubuntu-24.04"         # stable branch
         os_arm = "ubuntu-24.04-arm" # stable branch
+        os_i686 = "ubuntu-24.04"    # stable branch
     else:
         os = "ubuntu-24.04"         # development branch
         os_arm = "ubuntu-24.04-arm" # development branch
+        os_i686 = "ubuntu-24.04"    # development branch
 
     TARGET = "linux-glibc"
     for CC in ["gcc", "clang"]:
@@ -205,6 +207,7 @@ def main(ref_name):
                         'OPT_CFLAGS="-O1"',
                         "USE_ZLIB=1",
                         "USE_OT=1",
+                        "DEBUG=-DDEBUG_STRICT=2",
                         "OT_INC=${HOME}/opt-ot/include",
                         "OT_LIB=${HOME}/opt-ot/lib",
                         "OT_RUNPATH=1",
@@ -308,6 +311,48 @@ def main(ref_name):
                     "FLAGS": [],
                 }
             )
+
+    # Alpine / musl
+
+    matrix.append(
+        {
+            "name": "Alpine+musl, gcc",
+            "os": "ubuntu-latest",
+            "container": {
+                "image": "alpine:latest",
+                "options": "--privileged --ulimit core=-1 --security-opt seccomp=unconfined",
+                "volumes": ["/tmp/core:/tmp/core"],
+            },
+            "TARGET": "linux-musl",
+            "CC": "gcc",
+            "FLAGS": [
+                "ARCH_FLAGS='-ggdb3'",
+                "USE_LUA=1",
+                "LUA_INC=/usr/include/lua5.3",
+                "LUA_LIB=/usr/lib/lua5.3",
+                "USE_OPENSSL=1",
+                "USE_PCRE2=1",
+                "USE_PCRE2_JIT=1",
+                "USE_PROMEX=1",
+            ],
+        }
+    )
+
+    # i686
+
+    matrix.append(
+        {
+            "name": "{}, i686-linux-gnu-gcc".format(os_i686),
+            "os": os_i686,
+            "TARGET": "linux-glibc",
+            "CC": "i686-linux-gnu-gcc",
+            "FLAGS": [
+                "USE_OPENSSL=1",
+                "USE_PCRE2=1",
+                "USE_PCRE2_JIT=1",
+            ],
+        }
+    )
 
     # Print matrix
 

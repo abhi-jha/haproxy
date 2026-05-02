@@ -24,6 +24,7 @@
 #include <haproxy/acl.h>
 #include <haproxy/api.h>
 #include <haproxy/arg.h>
+#include <haproxy/cli.h>
 #include <haproxy/chunk.h>
 #include <haproxy/connection.h>
 #include <haproxy/counters.h>
@@ -160,6 +161,8 @@ int frontend_accept(struct stream *s)
 	}
 
 	if ((fe->http_needed || IS_HTX_STRM(s)) && !http_create_txn(s))
+		goto out_free_rspcap;
+	else if ((fe->mode == PR_MODE_CLI) && !pcli_create_txn(s))
 		goto out_free_rspcap;
 
 	/* everything's OK, let's go on */
@@ -323,6 +326,16 @@ smp_fetch_fe_tarpit_timeout(const struct arg *args, struct sample *smp, const ch
 	return 1;
 }
 
+static int
+sample_conv_fe_exists(const struct arg *args, struct sample *smp, void *private)
+{
+	if (!smp_make_safe(smp))
+		return 0;
+
+	smp->data.type = SMP_T_BOOL;
+	smp->data.u.sint = proxy_fe_by_name(smp->data.u.str.area) != NULL;
+	return 1;
+}
 
 /* Note: must not be declared <const> as its list will be overwritten.
  * Please take care of keeping this list alphabetically sorted.
@@ -340,6 +353,16 @@ static struct sample_fetch_kw_list smp_kws = {ILH, {
 }};
 
 INITCALL1(STG_REGISTER, sample_register_fetches, &smp_kws);
+
+/* Note: must not be declared <const> as its list will be overwritten.
+ * Please take care of keeping this list alphabetically sorted.
+ */
+static struct sample_conv_kw_list sample_conv_kws = {ILH, {
+	{ "fe_exists", sample_conv_fe_exists, 0, NULL, SMP_T_STR, SMP_T_BOOL },
+	{ /* END */ },
+}};
+
+INITCALL1(STG_REGISTER, sample_register_convs, &sample_conv_kws);
 
 /* Note: must not be declared <const> as its list will be overwritten.
  * Please take care of keeping this list alphabetically sorted.

@@ -4,6 +4,7 @@
 #include <haproxy/buf.h>
 #include <haproxy/chunk.h>
 #include <haproxy/connection.h>
+#include <haproxy/dynbuf.h>
 #include <haproxy/mux_quic.h>
 #include <haproxy/mux_quic_priv.h>
 #include <haproxy/proxy.h>
@@ -77,6 +78,16 @@ static int qstrm_parse_frm(struct qcc *qcc, struct buffer *buf)
 		struct qf_max_stream_data *msd_frm = &frm.max_stream_data;
 		qcc_recv_max_stream_data(qcc, msd_frm->id, msd_frm->max_stream_data);
 	}
+	else if (frm.type == QUIC_FT_MAX_STREAMS_BIDI) {
+		struct qf_max_streams *ms_frm = &frm.max_streams_bidi;
+		qcc_recv_max_streams(qcc, ms_frm->max_streams, 1);
+	}
+	else if (frm.type == QUIC_FT_DATA_BLOCKED ||
+	         frm.type == QUIC_FT_STREAM_DATA_BLOCKED ||
+	         frm.type == QUIC_FT_STREAMS_BLOCKED_BIDI ||
+	         frm.type == QUIC_FT_STREAMS_BLOCKED_UNI) {
+	        /* TODO */
+	}
 	else {
 		ABORT_NOW();
 	}
@@ -93,24 +104,31 @@ int qcc_qstrm_recv(struct qcc *qcc)
 {
 	struct connection *conn = qcc->conn;
 	struct buffer *buf = &qcc->rx.qstrm_buf;
-	int total = 0, frm_ret;
-	size_t ret;
+	struct buffer buf_rec;
+	int total = 0, dec = 1, frm_ret;
+	size_t ret = 1;
 
 	TRACE_ENTER(QMUX_EV_QCC_RECV, qcc->conn);
+
+	if (qcc->flags & QC_CF_ERR_CONN)
+		return 0;
+
+	if (!b_alloc(buf, DB_MUX_RX)) {
+		TRACE_ERROR("rx qstrm buf alloc failure", QMUX_EV_QCC_RECV);
+		goto err;
+	}
 
 	do {
  recv:
 		/* Wrapping is not supported for QMux reception. */
 		BUG_ON(b_data(buf) != b_contig_data(buf, 0));
 
-		/* Checks if there is no more room before wrapping position. */
-		if (b_head(buf) + b_contig_data(buf, 0) == b_wrap(buf)) {
-			if (!b_room(buf)) {
-				/* TODO frame bigger than buffer, connection must be closed */
-				ABORT_NOW();
-			}
-
-			/* Realign data in the buffer to have more room. */
+		/* Realign buffer if current record too big or cannot decode
+		 * record header and wrapping position reached.
+		 */
+		if (b_head(buf) + qcc->rx.rlen > b_wrap(buf) ||
+		    (!dec && b_head(buf) + b_data(buf) == b_wrap(buf))) {
+			BUG_ON(qcc->rx.rlen > b_size(buf)); /* TODO max_record_size */
 			memmove(b_orig(buf), b_head(buf), b_data(buf));
 			buf->head = 0;
 		}
@@ -119,29 +137,67 @@ int qcc_qstrm_recv(struct qcc *qcc)
 			b_realign_if_empty(buf);
 		}
 
-		ret = conn->xprt->rcv_buf(conn, conn->xprt_ctx, buf, b_contig_space(buf), NULL, 0, 0);
-		BUG_ON(conn->flags & CO_FL_ERROR);
+		/* Try read if record header not yet read and no data available
+		 * or header cannot be decoded, or either if current record
+		 * is incomplete.
+		 */
+		if ((!qcc->rx.rlen && (!b_data(buf) || !dec)) ||
+		    qcc->rx.rlen > b_data(buf)) {
+			/* Previous realign operation should ensure send cannot result in data wrapping. */
+			BUG_ON(b_data(buf) && b_tail(buf) == b_orig(buf));
+			ret = conn->xprt->rcv_buf(conn, conn->xprt_ctx, buf, b_contig_space(buf), NULL, 0, 0);
+			if (qcc->conn->flags & CO_FL_ERROR)
+				goto out;
+			/* Previous realign operation should ensure send cannot result in data wrapping. */
+			BUG_ON(b_data(buf) != b_contig_data(buf, 0));
+		}
 
-		total += ret;
-		while (b_data(buf)) {
-			frm_ret = qstrm_parse_frm(qcc, buf);
+		if (b_data(buf) && !qcc->rx.rlen) {
+			dec = b_quic_dec_int(&qcc->rx.rlen, buf, NULL);
+			/* Restart read if an incomplete record has been received
+			 * until there is no more new data available.
+			 */
+			if (ret && (!dec ||
+			            b_head(buf) + qcc->rx.rlen > b_wrap(buf) ||
+			            b_data(buf) < qcc->rx.rlen)) {
+				goto recv;
+			}
+		}
+
+		/* TODO realign necessary if record boundary at the extreme end of the buffer */
+		BUG_ON(!qcc->rx.rlen && b_data(buf) && b_tail(buf) == b_orig(buf));
+
+		while (qcc->rx.rlen && b_data(buf) >= qcc->rx.rlen) {
+			buf_rec = b_make(b_orig(buf), b_size(buf),
+			                 b_head_ofs(buf), qcc->rx.rlen);
+			frm_ret = qstrm_parse_frm(qcc, &buf_rec);
 
 			BUG_ON(frm_ret < 0); /* TODO handle fatal errors */
 			if (!frm_ret) {
-				/* Checks if wrapping position is reached, requires realign. */
-				if (b_head(buf) + b_contig_data(buf, 0) == b_wrap(buf))
-					goto recv;
-				/* Truncated frame read but room still left, subscribe to retry later. */
-				break;
+				/* emit FRAME_ENCODING_ERROR */
+				ABORT_NOW();
 			}
 
+			/* A frame cannot be bigger than a record thanks to <buf_rec> delimitation. */
+			BUG_ON(qcc->rx.rlen < frm_ret);
 			b_del(buf, frm_ret);
+			qcc->rx.rlen -= frm_ret;
+			total += frm_ret;
 		}
 	} while (ret > 0);
 
-	if (!conn_xprt_read0_pending(qcc->conn)) {
+ out:
+	if ((conn->flags & CO_FL_ERROR) || conn_xprt_read0_pending(conn)) {
+		qcc->flags |= QC_CF_ERR_CONN;
+	}
+	else {
 		conn->xprt->subscribe(conn, conn->xprt_ctx, SUB_RETRY_RECV,
 		                      &qcc->wait_event);
+	}
+
+	if (!b_data(buf)) {
+		b_free(buf);
+		offer_buffers(NULL, 1);
 	}
 
 	TRACE_LEAVE(QMUX_EV_QCC_RECV, qcc->conn);
@@ -217,7 +273,7 @@ static void qstrm_ctrl_send(struct qcs *qcs, uint64_t data)
 /* Sends <frms> list of frames for <qcc> connection.
  *
  * Returns 0 if all data are emitted or a positive value if sending should be
- * retry later. A negative error code is used for a fatal failure.
+ * retried later. A negative error code is used for a fatal failure.
  */
 int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
 {
@@ -226,29 +282,41 @@ int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
 	struct quic_frame *split_frm, *next_frm;
 	struct buffer *buf = &qcc->tx.qstrm_buf;
 	unsigned char *pos, *old, *end;
-	size_t ret;
+	size_t sent;
+	int ret, lensz, enc;
 
 	TRACE_ENTER(QMUX_EV_QCC_SEND, qcc->conn);
 
+	if (!b_alloc(buf, DB_MUX_TX)) {
+		TRACE_ERROR("tx qstrm buf alloc failure", QMUX_EV_QCC_SEND);
+		goto out;
+	}
+
+	/* Record size field length */
+	lensz = quic_int_getsize(quic_int_cap_length(b_size(buf)));
+
+	/* Purge buffer first if remaining data to send. */
 	if (b_data(buf)) {
-		ret = conn->xprt->snd_buf(conn, conn->xprt_ctx, buf, b_data(buf), NULL, 0, 0);
-		if (!ret) {
+		sent = conn->xprt->snd_buf(conn, conn->xprt_ctx, buf, b_data(buf), NULL, 0, 0);
+		if (conn->flags & CO_FL_ERROR)
+			goto out;
+		if (!sent) {
 			TRACE_DEVEL("snd_buf interrupted", QMUX_EV_QCC_SEND, qcc->conn);
 			goto out;
 		}
 
-		if (ret != b_data(buf)) {
+		if (sent != b_data(buf)) {
 			/* TODO */
 			ABORT_NOW();
 		}
 	}
 
-	b_reset(buf);
 	list_for_each_entry_safe(frm, frm_old, frms, list) {
  loop:
 		split_frm = next_frm = NULL;
 		b_reset(buf);
-		old = pos = (unsigned char *)b_orig(buf);
+		/* Reserve space for the record header. */
+		old = pos = (unsigned char *)b_orig(buf) + lensz;
 		end = (unsigned char *)b_wrap(buf);
 
 		BUG_ON(!frm);
@@ -277,41 +345,56 @@ int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
 		qc_build_frm(frm, &pos, end, NULL);
 		BUG_ON(pos - old > global.tune.bufsize);
 		BUG_ON(pos == old);
+
+		/* Encode record header and save built payload. */
+		enc = b_quic_enc_int(buf, pos - old, lensz);
+		BUG_ON(!enc); /* Cannot fail as space already reserved earlier. */
 		b_add(buf, pos - old);
 
-		ret = conn->xprt->snd_buf(conn, conn->xprt_ctx, buf, b_data(buf), NULL, 0, 0);
-		if (!ret) {
+		sent = conn->xprt->snd_buf(conn, conn->xprt_ctx, buf, b_data(buf), NULL, 0, 0);
+		if (conn->flags & CO_FL_ERROR)
+			goto out;
+		if (!sent) {
 			TRACE_DEVEL("snd_buf interrupted", QMUX_EV_QCC_SEND, qcc->conn);
 			if (split_frm)
 				LIST_INSERT(frms, &split_frm->list);
 			break;
 		}
 
-		if (ret != b_data(buf)) {
-			/* TODO */
-			ABORT_NOW();
-		}
+		/* TODO */
+		BUG_ON(sent != b_data(buf));
+		b_del(buf, sent);
 
 		if (frm->type >= QUIC_FT_STREAM_8 && frm->type <= QUIC_FT_STREAM_F)
 			qstrm_ctrl_send(frm->stream.stream, frm->stream.len);
 
-		LIST_DEL_INIT(&frm->list);
 		if (split_frm) {
+			qc_frm_free(NULL, &split_frm);
 			frm = next_frm;
 			goto loop;
 		}
+		qc_frm_free(NULL, &frm);
 	}
 
  out:
-	if (conn->flags & CO_FL_ERROR) {
-		/* TODO */
-		//ABORT_NOW();
+	if ((conn->flags & CO_FL_ERROR)) {
+		qcc->flags |= QC_CF_ERR_CONN;
+		ret = -1;
 	}
-	else if (!LIST_ISEMPTY(frms) && !(qcc->wait_event.events & SUB_RETRY_SEND)) {
-		conn->xprt->subscribe(conn, conn->xprt_ctx, SUB_RETRY_SEND, &qcc->wait_event);
-		return 1;
+	else if (!LIST_ISEMPTY(frms)) {
+		if (!(qcc->wait_event.events & SUB_RETRY_SEND))
+			conn->xprt->subscribe(conn, conn->xprt_ctx, SUB_RETRY_SEND, &qcc->wait_event);
+		ret = 1;
+	}
+	else {
+		ret = 0;
+	}
+
+	if (!b_data(buf)) {
+		b_free(buf);
+		offer_buffers(NULL, 1);
 	}
 
 	TRACE_LEAVE(QMUX_EV_QCC_SEND, qcc->conn);
-	return 0;
+	return ret;
 }

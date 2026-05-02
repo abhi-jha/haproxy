@@ -1527,7 +1527,6 @@ static int resolv_validate_dns_response(unsigned char *resp, unsigned char *bufe
 				goto invalid_resp;
 			answer_record->data.in6.sin6_family = AF_INET6;
 			memcpy(&answer_record->data.in6.sin6_addr, reader, answer_record->data_len);
-			break;
 		}
 		else {
 			pool_free(resolv_answer_item_pool, answer_record);
@@ -2555,7 +2554,7 @@ struct task *process_resolvers(struct task *t, void *context, unsigned int state
 	list_for_each_entry_safe(res, resback, &resolvers->resolutions.wait, list) {
 
 		if (unlikely(stopping)) {
-			/* If haproxy is stopping, check if the resolution to know if it must be run or not.
+			/* If haproxy is stopping, check if the resolution must be run or not.
 			 * If at least a requester is a stream (because of a do-resolv action) or if there
 			 * is a requester attached to a running proxy, the resolution is performed.
 			 * Otherwise, it is skipped for now.
@@ -2594,7 +2593,7 @@ struct task *process_resolvers(struct task *t, void *context, unsigned int state
 			}
 
 			if (!must_run) {
-				/* Skip the reolsution. reset it and wait for the next wakeup */
+				/* Skip the resolution. reset it and wait for the next wakeup */
 				resolv_reset_resolution(res);
 				continue;
 			}

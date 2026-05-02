@@ -502,7 +502,8 @@ static void session_kill_embryonic(struct session *sess, unsigned int state)
 		if (!conn->err_code ||
 		    conn->err_code == CO_ER_PRX_EMPTY || conn->err_code == CO_ER_PRX_ABORT ||
 		    conn->err_code == CO_ER_CIP_EMPTY || conn->err_code == CO_ER_CIP_ABORT ||
-		    conn->err_code == CO_ER_SSL_EMPTY || conn->err_code == CO_ER_SSL_ABORT)
+		    conn->err_code == CO_ER_SSL_EMPTY || conn->err_code == CO_ER_SSL_ABORT ||
+		    conn->err_code == CO_ER_QSTRM)
 			log = 0;
 	}
 
@@ -514,6 +515,8 @@ static void session_kill_embryonic(struct session *sess, unsigned int state)
 				conn->err_code = CO_ER_CIP_TIMEOUT;
 			else if (conn->flags & CO_FL_SSL_WAIT_HS)
 				conn->err_code = CO_ER_SSL_TIMEOUT;
+			else if (conn->flags & CO_FL_QSTRM_RECV)
+				conn->err_code = CO_ER_QSTRM;
 		}
 
 		sess_log_embryonic(sess);
@@ -680,11 +683,18 @@ int session_add_conn(struct session *sess, struct connection *conn)
 
 	HA_SPIN_LOCK(IDLE_CONNS_LOCK, &idle_conns[tid].idle_conns_lock);
 
-	/* Already attach to the session */
+	/* Already attached to the session */
 	if (!LIST_ISEMPTY(&conn->sess_el)) {
 		ret = 1;
 		goto out;
 	}
+
+	/* Ensure owner is set for connection. It could have been reset upon a
+	 * session_add_conn() failure. We want to set it even if allocation
+	 * below fails so that the session that is expected to manage this
+	 * connection is always known.
+	 */
+	conn->owner = sess;
 
 	pconns = sess_get_sess_conns(sess, conn->target);
 	if (!pconns) {
@@ -694,10 +704,6 @@ int session_add_conn(struct session *sess, struct connection *conn)
 	}
 
 	LIST_APPEND(&pconns->conn_list, &conn->sess_el);
-	/* Ensure owner is set for connection. It could have been reset
-	 * prior on after a session_add_conn() failure.
-	 */
-	conn->owner = sess;
 	ret = 1;
 
  out:

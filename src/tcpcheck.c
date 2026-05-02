@@ -72,7 +72,7 @@
 /* Global tree to share all tcp-checks */
 struct eb_root shared_tcpchecks = EB_ROOT;
 
-/* Proxy used during parsing of healtcheck sections */
+/* Proxy used during parsing of healthcheck sections */
 struct proxy *tcpchecks_proxy = NULL;
 
 DECLARE_TYPED_POOL(pool_head_tcpcheck_rule, "tcpcheck_rule", struct tcpcheck_rule);
@@ -335,6 +335,7 @@ void free_tcpcheck_ruleset(struct tcpcheck_ruleset *rs)
 		LIST_DELETE(&r->list);
 		free_tcpcheck(r, 0);
 	}
+	free((char*)rs->conf.file);
 	free(rs);
 }
 
@@ -515,7 +516,7 @@ static void tcpcheck_expect_onsuccess_message(struct buffer *msg, struct check *
 
 	/* Follows these step to produce the info message:
 	 *     1. if info field is already provided, copy it
-	 *     2. if the expect rule provides an onsucces log-format string,
+	 *     2. if the expect rule provides an onsuccess log-format string,
 	 *        use it to produce the message
 	 *     3. the expect rule is part of a protocol check (http, redis, mysql...), do nothing
 	 *     4. Otherwise produce the generic tcp-check info message
@@ -1283,7 +1284,8 @@ enum tcpcheck_eval_ret tcpcheck_eval_connect(struct check *check, struct tcpchec
 	struct tcpcheck_rule *next;
 	struct buffer *auto_sni = NULL;
 	int status, port;
-	int check_type;
+	int check_type, check_reuse;
+	int64_t hash = 0;
 #ifdef USE_OPENSSL
 	struct ist sni = IST_NULL;
 #endif
@@ -1291,6 +1293,11 @@ enum tcpcheck_eval_ret tcpcheck_eval_connect(struct check *check, struct tcpchec
 	TRACE_ENTER(CHK_EV_TCPCHK_CONN, check);
 
 	check_type = check->tcpcheck->rs->flags & TCPCHK_RULES_PROTO_CHK;
+	/* Determine if reuse can be used for this check. */
+	check_reuse =
+	  check_type == TCPCHK_RULES_HTTP_CHK && check->reuse_pool &&
+	  !tcpcheck_use_nondefault_connect(check, connect) &&
+	  !srv_is_transparent(s) ? 1 : 0;
 
 	next = get_next_tcpcheck_rule(check->tcpcheck->rs, rule);
 
@@ -1328,13 +1335,9 @@ enum tcpcheck_eval_ret tcpcheck_eval_connect(struct check *check, struct tcpchec
 		}
 	}
 
-	/* For http-check rulesets connection reuse may be used (check-reuse-pool). */
-	if (check_type == TCPCHK_RULES_HTTP_CHK && check->reuse_pool &&
-	    !tcpcheck_use_nondefault_connect(check, connect) &&
-	    !srv_is_transparent(s)) {
+	if (check_reuse) {
 		struct ist pool_conn_name = IST_NULL;
 		struct sockaddr_storage *dst, dst_tmp;
-		int64_t hash;
 		int conn_err;
 
 		TRACE_DEVEL("trying connection reuse for check", CHK_EV_TCPCHK_CONN, check);
@@ -1421,25 +1424,14 @@ enum tcpcheck_eval_ret tcpcheck_eval_connect(struct check *check, struct tcpchec
 		      ? connect->addr
 		      : (is_addr(&check->addr) ? check->addr : s->addr));
 
-	if (s && srv_is_quic(s) && tcpcheck_use_nondefault_connect(check, connect)) {
-		/* For QUIC servers, fallback to TCP checks if any specific
-		 * check connection parameter is set.
+	if (connect->options & TCPCHK_OPT_DEFAULT_CONNECT)
+		proto = protocol_lookup(conn->dst->ss_family, check->addr_type.proto_type, check->alt_proto);
+	else {
+		/*
+		 * For explicit tcp-check/http-check rules, always assume TCP,
+		 * QUIC is not supported yet.
 		 */
 		proto = protocol_lookup(conn->dst->ss_family, PROTO_TYPE_STREAM, 0);
-		/* Also reset MUX protocol if set to QUIC. */
-		if (check->mux_proto == s->mux_proto)
-			check->mux_proto = NULL;
-	}
-	else {
-		if (check->proto)
-			proto = check->proto;
-		else {
-			if (is_addr(&connect->addr))
-				proto = protocol_lookup(conn->dst->ss_family, PROTO_TYPE_STREAM, 0);
-			else
-				proto = protocol_lookup(conn->dst->ss_family, s->addr_type.proto_type, s->alt_proto);
-
-		}
 	}
 
 	port = 0;
@@ -1527,7 +1519,11 @@ enum tcpcheck_eval_ret tcpcheck_eval_connect(struct check *check, struct tcpchec
 	if (status != SF_ERR_NONE)
 		goto fail_check;
 
-	conn_set_private(conn);
+	if (check_reuse)
+		conn->hash_node.key = hash;
+	else
+		conn_set_private(conn);
+
 	conn->ctx = check->sc;
 
 #ifdef USE_OPENSSL
@@ -1859,6 +1855,7 @@ enum tcpcheck_eval_ret tcpcheck_eval_send(struct check *check, struct tcpcheck_r
 		htx_to_buf(htx, &check->bo);
 	}
 	if (b_is_small(&check->bo)) {
+		free_trash_chunk(tmp);
 		check->state &= ~CHK_ST_USE_SMALL_BUFF;
 		check_release_buf(check, &check->bo);
 		TRACE_DEVEL("Send fail with small buffer retry with default one", CHK_EV_TCPCHK_SND|CHK_EV_TX_DATA, check);
@@ -2202,7 +2199,7 @@ enum tcpcheck_eval_ret tcpcheck_eval_expect_http(struct check *check, struct tcp
 			status = ((status != HCHK_STATUS_UNKNOWN) ? status : HCHK_STATUS_L7RSP);
 			if (lf_expr_isempty(&expect->onerror_fmt))
 				desc = ist("HTTP content check could not find a response body");
-			TRACE_ERROR("no response boduy found while expected", CHK_EV_TCPCHK_EXP|CHK_EV_TCPCHK_ERR, check);
+			TRACE_ERROR("no response body found while expected", CHK_EV_TCPCHK_EXP|CHK_EV_TCPCHK_ERR, check);
 			goto error;
 		}
 
@@ -3909,7 +3906,7 @@ int tcpcheck_add_http_rule(struct tcpcheck_rule *chk, struct tcpcheck_ruleset *r
 	struct tcpcheck_rule *r;
 
 	/* the implicit send rule coming from an "option httpchk" line must be
-	 * merged with the first explici http-check send rule, if
+	 * merged with the first explicit http-check send rule, if
 	 * any. Depending on the declaration order some tests are required.
 	 *
 	 * Some tests are also required for other kinds of http-check rules to be
@@ -3946,7 +3943,7 @@ int tcpcheck_add_http_rule(struct tcpcheck_rule *chk, struct tcpcheck_ruleset *r
 		}
 	}
 	else {
-		/* Tries to add an explicit http-check rule. First of all we check the typefo the
+		/* Tries to add an explicit http-check rule. First of all we check the type of the
 		 * last inserted rule to be sure it is valid. Then for send rule, we try to merge it
 		 * with an existing implicit send rule, if any. At the end, if there is no error,
 		 * the rule is appended to the list.
@@ -4053,7 +4050,7 @@ static int check_tcpcheck_ruleset(struct proxy *px, struct tcpcheck_ruleset *rs)
 	}
 
 	/* Now, back again on HTTP ruleset. Try to resolve the sni log-format
-	 * string if necessary, but onlu for implicit connect rules, by getting
+	 * string if necessary, but only for implicit connect rules, by getting
 	 * it from the following send rule.
 	 */
 	if ((rs->flags & TCPCHK_RULES_PROTO_CHK) == TCPCHK_RULES_HTTP_CHK) {
@@ -4062,7 +4059,7 @@ static int check_tcpcheck_ruleset(struct proxy *px, struct tcpcheck_ruleset *rs)
 		list_for_each_entry(chk, &rs->rules, list) {
 			if (chk->action == TCPCHK_ACT_CONNECT && !chk->connect.sni &&
 			    (chk->connect.options & TCPCHK_OPT_IMPLICIT)) {
-				/* Only eval connect rule with no explici SNI */
+				/* Only eval connect rule with no explicit SNI */
 				connect = &chk->connect;
 			}
 			else if (connect && chk->action == TCPCHK_ACT_SEND) {
@@ -4203,20 +4200,13 @@ void deinit_proxy_tcpcheck(struct proxy *px)
 static void deinit_tcpchecks()
 {
 	struct tcpcheck_ruleset *rs;
-	struct tcpcheck_rule *r, *rb;
 	struct ebpt_node *node, *next;
 
 	node = ebpt_first(&shared_tcpchecks);
 	while (node) {
 		next = ebpt_next(node);
-		ebpt_delete(node);
-		free(node->key);
 		rs = container_of(node, typeof(*rs), node);
-		list_for_each_entry_safe(r, rb, &rs->rules, list) {
-			LIST_DELETE(&r->list);
-			free_tcpcheck(r, 0);
-		}
-		free(rs);
+		free_tcpcheck_ruleset(rs);
 		node = next;
 	}
 }
@@ -4504,7 +4494,7 @@ static int do_parse_ssl_hello_chk_opt(char **args, int cur_arg, struct proxy *cu
 		"16"                        /* ContentType         : 0x16 = Handshake          */
 		"0300"                      /* ProtocolVersion     : 0x0300 = SSLv3            */
 		"0079"                      /* ContentLength       : 0x79 bytes after this one */
-		"01"                        /* HanshakeType        : 0x01 = CLIENT HELLO       */
+		"01"                        /* HandshakeType       : 0x01 = CLIENT HELLO       */
 		"000075"                    /* HandshakeLength     : 0x75 bytes after this one */
 		"0300"                      /* Hello Version       : 0x0300 = v3               */
 		"%[date(),htonl,hex]"       /* Unix GMT Time (s)   : filled with <now> (@0x0B) */
@@ -4883,7 +4873,7 @@ static int do_parse_mysql_check_opt(char **args, int cur_arg, struct proxy *curp
 		"00820000"                     /* client capabilities */
 		"00800001"                     /* max packet */
 		"21"                           /* character set (UTF-8) */
-		"000000000000000000000000"     /* 23 bytes, al zeroes */
+		"000000000000000000000000"     /* 23 bytes, all zeroes */
 		"0000000000000000000000"
 		"%[var(check.username),hex]00" /* the username */
 		"00"                           /* filler (always 0x00) */
@@ -5180,7 +5170,6 @@ static int do_parse_spop_check_opt(char **args, int cur_arg, struct proxy *curpx
 	return err_code;
 
   error:
-	free_tcpcheck_ruleset(rs);
 	err_code |= ERR_ALERT | ERR_FATAL;
 	goto out;
 }
@@ -5366,7 +5355,7 @@ int proxy_parse_tcpcheck(char **args, int section, struct proxy *curpx, const st
 	return ret;
 }
 
-/* Parses the "http-check" proxyx keyword */
+/* Parses the "http-check" proxy keyword */
 static int proxy_parse_httpcheck(char **args, int section, struct proxy *curpx, const struct proxy *defpx,
 				 const char *file, int line, char **errmsg)
 {
@@ -5644,7 +5633,7 @@ int proxy_parse_mysql_check_opt(char **args, int cur_arg, struct proxy *curpx, c
 	return err_code;
 }
 
-/* Parses the "option httpchck" proxy keyword */
+/* Parses the "option httpchk" proxy keyword */
 int proxy_parse_httpchk_opt(char **args, int cur_arg, struct proxy *curpx, const struct proxy *defpx,
 			    const char *file, int line)
 {
@@ -5844,7 +5833,7 @@ int cfg_parse_healthchecks(const char *file, int linenum, char **args, int kwm)
 			goto out;
 		}
 		else {
-			ha_alert("parsing [%s:%d] : unknown healthcheck type '%s (expects 'tcp-check', 'httpchk', 'ssl-hello-chk', "
+			ha_alert("parsing [%s:%d] : unknown healthcheck type '%s' (expects 'tcp-check', 'httpchk', 'ssl-hello-chk', "
 				 "'smtpchk', 'pgsql-check', 'redis-check', 'mysql-check', 'ldap-check', 'spop-check').\n",
 				 file, linenum, args[1]);
 			err_code |= ERR_ALERT | ERR_ABORT;

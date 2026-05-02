@@ -17,12 +17,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
-#include "include.h"
+#include "../include/include.h"
 
 
 #ifdef DEBUG_OT
 struct flt_ot_debug               flt_ot_debug;
-THREAD_LOCAL int                  dbg_indent_level = 0;
+THREAD_LOCAL int                  flt_ot_dbg_indent_level = 0;
 #endif
 
 #ifdef OTC_DBG_MEM
@@ -359,17 +359,13 @@ static int flt_ot_parse_cfg_sample(const char *file, int linenum, char **args, s
  */
 static int flt_ot_parse_cfg_str(const char *file, int linenum, char **args, struct list *head, char **err)
 {
-	struct flt_ot_conf_str *str = NULL;
-	int                     i, retval = ERR_NONE;
+	int i, retval = ERR_NONE;
 
 	FLT_OT_FUNC("\"%s\", %d, %p, %p, %p:%p", file, linenum, args, head, FLT_OT_DPTR_ARGS(err));
 
 	for (i = 1; !(retval & ERR_CODE) && FLT_OT_ARG_ISVALID(i); i++)
 		if (flt_ot_conf_str_init(args[i], linenum, head, err) == NULL)
 			retval |= ERR_ABORT | ERR_ALERT;
-
-	if (retval & ERR_CODE)
-		flt_ot_conf_str_free(&str);
 
 	FLT_OT_RETURN_INT(retval);
 }
@@ -644,7 +640,7 @@ static int flt_ot_parse_cfg_group(const char *file, int linenum, char **args, in
 
 	if (pdata->keyword == FLT_OT_PARSE_GROUP_ID) {
 		flt_ot_current_group = flt_ot_conf_group_init(args[1], linenum, &(flt_ot_current_config->groups), &err);
-		if (flt_ot_current_config == NULL)
+		if (flt_ot_current_group == NULL)
 			retval |= ERR_ABORT | ERR_ALERT;
 	}
 	else if (pdata->keyword == FLT_OT_PARSE_GROUP_SCOPES) {

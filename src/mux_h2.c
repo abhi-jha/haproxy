@@ -127,7 +127,7 @@ struct h2s {
 	uint rx_count;         /* total number of allocated rxbufs */
 	/* 4 bytes hole here */
 	struct wait_event *subs;  /* recv wait_event the stream connector associated is waiting on (via h2_subscribe) */
-	struct list list; /* To be used when adding in h2c->send_list or h2c->fctl_lsit */
+	struct list list; /* To be used when adding in h2c->send_list or h2c->fctl_list */
 	struct tasklet *shut_tl;  /* deferred shutdown tasklet, to retry to send an RST after we failed to,
 				   * in case there's no other subscription to do it */
 
@@ -509,7 +509,7 @@ static const struct sedesc closed_ep = {
 	.flags     = SE_FL_DETACHED,
 };
 
-/* a dmumy closed stream */
+/* a dummy closed stream */
 static const struct h2s *h2_closed_stream = &(const struct h2s){
 	.sd        = (struct sedesc *)&closed_ep,
 	.h2c       = NULL,
@@ -519,7 +519,7 @@ static const struct h2s *h2_closed_stream = &(const struct h2s){
 	.id        = 0,
 };
 
-/* a dmumy closed stream returning a PROTOCOL_ERROR error */
+/* a dummy closed stream returning a PROTOCOL_ERROR error */
 static const struct h2s *h2_error_stream = &(const struct h2s){
 	.sd        = (struct sedesc *)&closed_ep,
 	.h2c       = NULL,
@@ -529,7 +529,7 @@ static const struct h2s *h2_error_stream = &(const struct h2s){
 	.id        = 0,
 };
 
-/* a dmumy closed stream returning a REFUSED_STREAM error */
+/* a dummy closed stream returning a REFUSED_STREAM error */
 static const struct h2s *h2_refused_stream = &(const struct h2s){
 	.sd        = (struct sedesc *)&closed_ep,
 	.h2c       = NULL,
@@ -565,8 +565,6 @@ static void h2s_alert(struct h2s *h2s);
 static inline void h2_remove_from_list(struct h2s *h2s);
 static int h2_dump_h2c_info(struct buffer *msg, struct h2c *h2c, const char *pfx);
 static int h2_dump_h2s_info(struct buffer *msg, const struct h2s *h2s, const char *pfx);
-static inline struct buffer *h2s_rxbuf_head(const struct h2s *h2s);
-static inline struct buffer *h2s_rxbuf_tail(const struct h2s *h2s);
 static inline struct buffer *h2s_rxbuf_head(const struct h2s *h2s);
 static inline struct buffer *h2s_rxbuf_tail(const struct h2s *h2s);
 
@@ -1063,7 +1061,6 @@ h2c_is_dead(const struct h2c *h2c)
 	    ((h2c->flags & H2_CF_ERROR) ||          /* errors close immediately */
 	     (h2c->flags & H2_CF_ERR_PENDING && h2c->st0 < H2_CS_FRAME_H) || /* early error during connect */
 	     (h2c->st0 >= H2_CS_ERROR && !h2c->task) || /* a timeout stroke earlier */
-	     (!(h2c->conn->owner) && !conn_is_reverse(h2c->conn)) || /* Nobody's left to take care of the connection, drop it now */
 	     (!br_data(h2c->mbuf) &&  /* mux buffer empty, also process clean events below */
 	      ((h2c->flags & H2_CF_RCVD_SHUT) ||
 	       h2c_reached_last_stream(h2c)))))
@@ -1076,7 +1073,7 @@ h2c_is_dead(const struct h2c *h2c)
 /* functions below are for dynamic buffer management */
 /*****************************************************/
 
-/* indicates whether or not the we may call the h2_recv() function to attempt
+/* indicates whether or not we may call the h2_recv() function to attempt
  * to receive data into the buffer and/or demux pending data. The condition is
  * a bit complex due to some API limits for now. The rules are the following :
  *   - if an error or a shutdown was detected on the connection, we must not
@@ -1520,6 +1517,7 @@ static int h2_init(struct connection *conn, struct proxy *prx, struct session *s
   fail:
 	task_destroy(t);
 	tasklet_free(h2c->wait_event.tasklet);
+	pool_free(pool_head_h2_rx_bufs, h2c->shared_rx_bufs);
 	pool_free(pool_head_h2c, h2c);
   fail_no_h2c:
 	if (!conn_is_back(conn))
@@ -3433,7 +3431,11 @@ static int h2c_handle_priority(struct h2c *h2c)
 		return 0;
 	}
 
-	if (h2_get_n32(&h2c->dbuf, 0) == h2c->dsi) {
+	/*
+	 * Bit 31 is the "exclusive" bit, it is not part of the stream ID,
+	 * so ignore it when checking if the stream ID is ours.
+	 */
+	if ((h2_get_n32(&h2c->dbuf, 0) & 0x7fffffff) == h2c->dsi) {
 		/* 7540#5.3 : can't depend on itself */
 		h2c_report_glitch(h2c, 1, "PRIORITY depends on itself");
 		TRACE_ERROR("PRIORITY depends on itself", H2_EV_RX_FRAME|H2_EV_RX_WU, h2c->conn);
@@ -3559,11 +3561,13 @@ static struct h2s *h2c_frt_handle_headers(struct h2c *h2c, struct h2s *h2s)
 			}
 
 			if (error < 0) {
-				/* Failed to decode this frame (e.g. too large request)
+				/* Failed to decode this frame (e.g. too large trailers)
 				 * but the HPACK decompressor is still synchronized.
 				 */
+				session_inc_http_err_ctr(h2c->conn->owner);
+				HA_ATOMIC_INC(&h2c->px_counters->strm_proto_err);
 				h2_sess_log_strm(h2c->conn->owner);
-				h2s_error(h2s, H2_ERR_INTERNAL_ERROR);
+				h2s_error(h2s, H2_ERR_PROTOCOL_ERROR);
 				TRACE_USER("Stream error decoding H2 trailers", H2_EV_RX_FRAME|H2_EV_RX_HDR|H2_EV_STRM_NEW|H2_EV_STRM_END, h2c->conn, 0, h2s_rxbuf_tail(h2s));
 				h2c->st0 = H2_CS_FRAME_E;
 				goto out;
@@ -3647,6 +3651,7 @@ static struct h2s *h2c_frt_handle_headers(struct h2c *h2c, struct h2s *h2s)
 		}
 
 		/* recoverable stream error (e.g. too large request) */
+		HA_ATOMIC_INC(&h2c->px_counters->strm_proto_err);
 		h2_sess_log_strm(h2c->conn->owner);
 		TRACE_USER("rcvd unparsable H2 request", H2_EV_RX_FRAME|H2_EV_RX_HDR|H2_EV_STRM_NEW|H2_EV_STRM_END, h2c->conn, h2s, &rxbuf);
 		goto strm_err;
@@ -5733,11 +5738,10 @@ static void h2_detach(struct sedesc *sd)
 
 			if (h2c->conn->flags & CO_FL_PRIVATE) {
 				/* Add the connection in the session server list, if not already done */
-				if (!session_add_conn(sess, h2c->conn))
-					h2c->conn->owner = NULL;
+				session_add_conn(sess, h2c->conn);
 
 				if (eb_is_empty(&h2c->streams_by_id)) {
-					if (!h2c->conn->owner) {
+					if (!LIST_INLIST(&h2c->conn->sess_el)) {
 						/* Session insertion above has failed and connection is idle, remove it. */
 						CALL_MUX_NO_RET(h2c->conn->mux, destroy(h2c));
 						TRACE_DEVEL("leaving on error after killing outgoing connection", H2_EV_STRM_END|H2_EV_H2C_ERR);
@@ -6335,6 +6339,15 @@ next_frame:
 			TRACE_STATE("invalid interim response with ES flag", H2_EV_RX_FRAME|H2_EV_RX_HDR|H2_EV_H2C_ERR|H2_EV_PROTO_ERR, h2c->conn);
 			goto fail;
 		}
+		/* Note that bodyless only applies to responses, even when
+		 * reported on the request (e.g. HEAD).
+		 */
+		if ((msgf & H2_MSGF_BODY_CL) && *body_len > 0 &&
+		    (!(h2c->flags & H2_CF_IS_BACK) || !(*flags & H2_SF_BODYLESS_RESP))) {
+			h2c_report_glitch(h2c, 1, "ES on HEADERS before end of content-length");
+			TRACE_STATE("ES on HEADERS before end of content-length", H2_EV_RX_FRAME|H2_EV_RX_HDR|H2_EV_H2C_ERR|H2_EV_PROTO_ERR, h2c->conn);
+			goto fail;
+		}
 		/* no more data are expected for this message */
 		htx->flags |= HTX_FL_EOM;
 		*flags |= H2_SF_ES_RCVD;
@@ -6570,7 +6583,7 @@ static size_t h2s_snd_fhdrs(struct h2s *h2s, struct htx *htx)
 			break;
 
 		if (type == HTX_BLK_HDR) {
-			BUG_ON(!sl); /* The start-line mut be defined before any headers */
+			BUG_ON(!sl); /* The start-line must be defined before any headers */
 			if (unlikely(hdr >= sizeof(list)/sizeof(list[0]) - 1)) {
 				TRACE_ERROR("too many headers", H2_EV_TX_FRAME|H2_EV_TX_HDR|H2_EV_H2S_ERR, h2c->conn, h2s);
 				goto fail;
@@ -6616,7 +6629,7 @@ static size_t h2s_snd_fhdrs(struct h2s *h2s, struct htx *htx)
 		}
 	}
 
-	/* The start-line me be defined */
+	/* The start-line must be defined */
 	BUG_ON(!sl);
 
 	/* marker for end of headers */
@@ -6840,7 +6853,7 @@ static size_t h2s_snd_bhdrs(struct h2s *h2s, struct htx *htx)
 			break;
 
 		if (type == HTX_BLK_HDR) {
-			BUG_ON(!sl); /* The start-line mut be defined before any headers */
+			BUG_ON(!sl); /* The start-line must be defined before any headers */
 			if (unlikely(hdr >= sizeof(list)/sizeof(list[0]) - 1)) {
 				TRACE_ERROR("too many headers", H2_EV_TX_FRAME|H2_EV_TX_HDR|H2_EV_H2S_ERR, h2c->conn, h2s);
 				goto fail;
@@ -6929,7 +6942,7 @@ static size_t h2s_snd_bhdrs(struct h2s *h2s, struct htx *htx)
 		}
 	}
 
-	/* The start-line me be defined */
+	/* The start-line must be defined */
 	BUG_ON(!sl);
 
 	/* Now add the server name to a header (if requested) */
@@ -7474,7 +7487,7 @@ static size_t h2s_make_data(struct h2s *h2s, struct buffer *buf, size_t count)
 	if (fsize > h2c->mws)
 		fsize = h2c->mws;
 
-	/* now let's copy this this into the output buffer */
+	/* now let's copy this into the output buffer */
 	memcpy(outbuf.area + 9, htx_get_blk_ptr(htx, blk), fsize);
 	h2s->sws -= fsize;
 	h2c->mws -= fsize;
@@ -8737,11 +8750,11 @@ static int h2_parse_log_errors(char **args, int section_type, struct proxy *curp
 
 	/* backend/frontend/default */
 	vptr = &h2_settings_log_errors;
-	if (strcmp(args[1], "none"))
+	if (strcmp(args[1], "none") == 0)
 		*vptr = H2_ERR_LOG_ERR_NONE;
-	else if (strcmp(args[1], "connection"))
+	else if (strcmp(args[1], "connection") == 0)
 		*vptr = H2_ERR_LOG_ERR_CONN;
-	else if (strcmp(args[1], "stream"))
+	else if (strcmp(args[1], "stream") == 0)
 		*vptr = H2_ERR_LOG_ERR_STRM;
 	else {
 		memprintf(err, "'%s' expects 'none', 'connection', or 'stream'", args[0]);

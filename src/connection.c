@@ -102,6 +102,20 @@ void conn_delete_from_tree(struct connection *conn, int thr)
 	ceb64_item_delete(conn_tree, hash_node.node, hash_node.key, conn);
 }
 
+/* Installs the MUX layer for <conn> connection. The behavior is slightly
+ * different for frontend and backend sides.
+ *
+ * For frontend connections, MUX is set up via session initialization
+ * completion. In case of failure, the session and the whole connection stack
+ * are freed. Caller should set <closed_connection> to a non NULL value as it
+ * will be set to 1 to report the connection release.
+ *
+ * For backend connections, MUX layer is immediately initialized by selecting
+ * the most appropriate one depending on the connection protocol. In case of
+ * failure, connection is left as it is and the upper layer is notified.
+ *
+ * Returns 0 on success else a negative error code.
+ */
 int conn_create_mux(struct connection *conn, int *closed_connection)
 {
 	if (closed_connection)
@@ -141,7 +155,7 @@ int conn_create_mux(struct connection *conn, int *closed_connection)
 fail:
 		/* let the upper layer know the connection failed */
 		if (sc) {
-			sc_conn_process(sc);
+			tasklet_wakeup(sc->wait_event.tasklet, TASK_WOKEN_MSG);
 		}
 		else if (conn_reverse_in_preconnect(conn)) {
 			struct listener *l = conn_active_reverse_listener(conn);
@@ -383,6 +397,17 @@ int conn_install_mux_be(struct connection *conn, void *ctx, struct session *sess
 		if (!mux_ops)
 			return -1;
 	}
+
+	/* unless the connection is private or it's temporarily reserved to the
+	 * session due to a mux presenting a risk of head-of-line blocking and
+	 * the reuse mode is set to "safe", we should reset the owner to avoid
+	 * any ambiguity.
+	 */
+	if (!(conn->flags & CO_FL_PRIVATE) &&
+	    ((prx->options & PR_O_REUSE_MASK) != PR_O_REUSE_SAFE ||
+	     !(mux_ops->flags & MX_FL_HOL_RISK)))
+		conn->owner = NULL;
+
 	return conn_install_mux(conn, mux_ops, ctx, prx, sess);
 }
 
@@ -862,6 +887,8 @@ const char *conn_err_code_str(struct connection *c)
 	case CO_ER_SOCKS4_ABORT:   return "SOCKS4 Proxy handshake aborted by server";
 
 	case CO_ER_SSL_FATAL:      return "SSL fatal error";
+
+	case CO_ER_QSTRM:          return "Error during QMux transport parameters initial exchange";
 
 	case CO_ER_REVERSE:        return "Reverse connect failure";
 

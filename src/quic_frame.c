@@ -665,7 +665,7 @@ static int quic_build_max_streams_uni_frame(unsigned char **pos, const unsigned 
 	return quic_enc_int(pos, end, ms_frm->max_streams);
 }
 
-/* Parse a MAX_STREAMS frame for undirectional streams at <pos> buffer position with <end>
+/* Parse a MAX_STREAMS frame for unidirectional streams at <pos> buffer position with <end>
  * as end into <frm> frame.
  * Return 1 if succeeded (enough room to parse this frame), 0 if not.
  */
@@ -978,7 +978,7 @@ static int quic_build_connection_close_app_frame(unsigned char **pos, const unsi
 	return 1;
 }
 
-/* Parse a CONNECTION_CLOSE frame at QUIC layer at <pos> buffer position with <end> as end into <frm> frame.
+/* Parse a CONNECTION_CLOSE frame at application layer at <pos> buffer position with <end> as end into <frm> frame.
  * Note there exist two types of CONNECTION_CLOSE frame, one for the application layer
  * and another at QUIC layer.
  * Return 1 if succeeded (enough room at <pos> buffer position to parse this frame), 0 if not.
@@ -1017,6 +1017,7 @@ static int quic_build_handshake_done_frame(unsigned char **pos, const unsigned c
 static int quic_build_qmux_transport_parameters(unsigned char **pos, const unsigned char *end,
                                                 struct quic_frame *frm, struct quic_conn *conn)
 {
+	struct qf_qx_transport_parameters *params_frm = &frm->qmux_transport_params;
 	unsigned char *old = *pos;
 	struct buffer buf;
 
@@ -1030,19 +1031,19 @@ static int quic_build_qmux_transport_parameters(unsigned char **pos, const unsig
 		return 0;
 	*pos += 8;
 
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_MAX_IDLE_TIMEOUT, 30000))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_MAX_IDLE_TIMEOUT, params_frm->params.max_idle_timeout))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_DATA, 16384))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_DATA, params_frm->params.initial_max_data))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, 16384))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, params_frm->params.initial_max_stream_data_bidi_local))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, 16384))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, params_frm->params.initial_max_stream_data_bidi_remote))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_UNI, 16384))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAM_DATA_UNI, params_frm->params.initial_max_stream_data_uni))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_BIDI, 100))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_BIDI, params_frm->params.initial_max_streams_bidi))
 		return 0;
-	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_UNI, 100))
+	if (!quic_transport_param_enc_int(pos, end, QUIC_TP_INITIAL_MAX_STREAMS_UNI, params_frm->params.initial_max_streams_uni))
 		return 0;
 
 	/* Re-encode the real length field now. */
@@ -1081,6 +1082,7 @@ static int quic_parse_qmux_transport_parameters(struct quic_frame *frm, struct q
 	if (!quic_transport_params_decode(&params_frm->params, 1, *pos, end))
 		return 0;
 
+	*pos += len;
 	return 1;
 }
 
@@ -1358,7 +1360,7 @@ int qc_build_frm_pkt(struct quic_frame *frm, struct quic_tx_packet *pkt,
 	TRACE_ENTER(QUIC_EV_CONN_BFRM, qc);
 
 	if (pkt && !(builder->mask & (1U << pkt->type))) {
-		/* XXX This it a bug to send an unauthorized frame with such a packet type XXX */
+		/* XXX This is a bug to send an unauthorized frame with such a packet type XXX */
 		TRACE_ERROR("unauthorized frame", QUIC_EV_CONN_BFRM, qc, frm);
 		BUG_ON(!(builder->mask & (1U << pkt->type)));
 	}

@@ -266,39 +266,39 @@ const unsigned int fetch_cap[SMP_SRC_ENTRIES] = {
 	                   SMP_VAL___________ | SMP_VAL_BE_CHK_RUL | SMP_VAL___________ |
 	                   SMP_VAL___________ ),
 
-	[SMP_SRC_RQFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
+	[SMP_SRC_RQFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL_FE_REQ_CNT |
+	                   SMP_VAL_FE_HRQ_HDR | SMP_VAL_FE_HRQ_BDY | SMP_VAL_FE_SET_BCK |
+	                   SMP_VAL_BE_REQ_CNT | SMP_VAL_BE_HRQ_HDR | SMP_VAL_BE_HRQ_BDY |
+	                   SMP_VAL_BE_SET_SRV | SMP_VAL_BE_SRV_CON | SMP_VAL_BE_RES_CNT |
+	                   SMP_VAL_BE_HRS_HDR | SMP_VAL_BE_HRS_BDY | SMP_VAL_BE_STO_RUL |
+	                   SMP_VAL_FE_RES_CNT | SMP_VAL_FE_HRS_HDR | SMP_VAL_FE_HRS_BDY |
 	                   SMP_VAL_FE_LOG_END | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ ),
 
 	[SMP_SRC_RSFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
+	                   SMP_VAL_BE_SET_SRV | SMP_VAL_BE_SRV_CON | SMP_VAL_BE_RES_CNT |
+	                   SMP_VAL_BE_HRS_HDR | SMP_VAL_BE_HRS_BDY | SMP_VAL_BE_STO_RUL |
+	                   SMP_VAL_FE_RES_CNT | SMP_VAL_FE_HRS_HDR | SMP_VAL_FE_HRS_BDY |
 	                   SMP_VAL_FE_LOG_END | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ ),
 
-	[SMP_SRC_TXFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
+	[SMP_SRC_TXFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL_FE_REQ_CNT |
+	                   SMP_VAL_FE_HRQ_HDR | SMP_VAL_FE_HRQ_BDY | SMP_VAL_FE_SET_BCK |
+	                   SMP_VAL_BE_REQ_CNT | SMP_VAL_BE_HRQ_HDR | SMP_VAL_BE_HRQ_BDY |
+	                   SMP_VAL_BE_SET_SRV | SMP_VAL_BE_SRV_CON | SMP_VAL_BE_RES_CNT |
+	                   SMP_VAL_BE_HRS_HDR | SMP_VAL_BE_HRS_BDY | SMP_VAL_BE_STO_RUL |
+	                   SMP_VAL_FE_RES_CNT | SMP_VAL_FE_HRS_HDR | SMP_VAL_FE_HRS_BDY |
 	                   SMP_VAL_FE_LOG_END | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ ),
 
-	[SMP_SRC_SSFIN] = (SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
-	                   SMP_VAL___________ | SMP_VAL___________ | SMP_VAL___________ |
+	[SMP_SRC_SSFIN] = (SMP_VAL_FE_CON_ACC | SMP_VAL_FE_SES_ACC | SMP_VAL_FE_REQ_CNT |
+	                   SMP_VAL_FE_HRQ_HDR | SMP_VAL_FE_HRQ_BDY | SMP_VAL_FE_SET_BCK |
+	                   SMP_VAL_BE_REQ_CNT | SMP_VAL_BE_HRQ_HDR | SMP_VAL_BE_HRQ_BDY |
+	                   SMP_VAL_BE_SET_SRV | SMP_VAL_BE_SRV_CON | SMP_VAL_BE_RES_CNT |
+	                   SMP_VAL_BE_HRS_HDR | SMP_VAL_BE_HRS_BDY | SMP_VAL_BE_STO_RUL |
+	                   SMP_VAL_FE_RES_CNT | SMP_VAL_FE_HRS_HDR | SMP_VAL_FE_HRS_BDY |
 	                   SMP_VAL_FE_LOG_END | SMP_VAL___________ | SMP_VAL___________ |
 	                   SMP_VAL___________ ),
 };
@@ -885,7 +885,7 @@ static int c_int2str(struct sample *smp)
  */
 int smp_dup(struct sample *smp)
 {
-	struct buffer *trash;
+	struct buffer *trash, *buf;
 
 	switch (smp->data.type) {
 	case SMP_T_BOOL:
@@ -902,19 +902,17 @@ int smp_dup(struct sample *smp)
 		__fallthrough;
 
 	case SMP_T_STR:
-		trash = get_trash_chunk_sz(smp->data.u.str.data+1);
+		buf = (smp->data.type == SMP_T_STR ? &smp->data.u.str : &smp->data.u.meth.str);
+		trash = get_trash_chunk_sz(buf->data+1);
 		if (!trash)
 			return 0;
-		trash->data = smp->data.type == SMP_T_STR ?
-		    smp->data.u.str.data : smp->data.u.meth.str.data;
+		trash->data = buf->data;
 		if (trash->data > trash->size - 1)
 			trash->data = trash->size - 1;
 
-		memcpy(trash->area, smp->data.type == SMP_T_STR ?
-		    smp->data.u.str.area : smp->data.u.meth.str.area,
-		    trash->data);
+		memcpy(trash->area, buf->area, trash->data);
 		trash->area[trash->data] = 0;
-		smp->data.u.str = *trash;
+		*buf = *trash;
 		break;
 
 	case SMP_T_BIN:
@@ -1473,6 +1471,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 		case ARGC_TCK:   where = "in tcp-check expression in"; break;
 		case ARGC_CFG:   where = "in configuration expression in"; break;
 		case ARGC_CLI:   where = "in CLI expression in"; break;
+		case ARGC_OTEL:  where = "in otel-scope directive in"; break;
 		}
 
 		/* set a few default settings */
@@ -1490,7 +1489,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 					 cur->arg_pos + 1, conv_pre, conv_ctx, conv_pos, ctx, cur->kw, where, p->id, err2);
 				ha_free(&err2);
 				cfgerr++;
-				continue;
+				break;
 			}
 			break;
 
@@ -1500,7 +1499,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 					 *err ? *err : "", cur->file, cur->line,
 					 cur->arg_pos + 1, conv_pre, conv_ctx, conv_pos, ctx, cur->kw, where, p->id);
 				cfgerr++;
-				continue;
+				break;
 			}
 
 			/* we support two formats : "bck/srv" and "srv" */
@@ -1683,7 +1682,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 					 *err ? *err : "", cur->file, cur->line,
 					 cur->arg_pos + 1, conv_pre, conv_ctx, conv_pos, ctx, cur->kw, where, p->id);
 				cfgerr++;
-				continue;
+				break;
 			}
 
 			rflags = 0;
@@ -1697,7 +1696,7 @@ int smp_resolve_args(struct proxy *p, char **err)
 					 cur->arg_pos + 1, conv_pre, conv_ctx, conv_pos, ctx, cur->kw, where, p->id, err2);
 				ha_free(&err2);
 				cfgerr++;
-				continue;
+				break;
 			}
 
 			chunk_destroy(&arg->data.str);
@@ -3300,7 +3299,12 @@ static int sample_conv_regsub(const struct arg *arg_p, struct sample *smp, void 
 		if (!output)
 			break;
 
-		output->data = exp_replace(output->area, output->size, start, arg_p[1].data.str.area, pmatch);
+		max = exp_replace(output->area, output->size, start, arg_p[1].data.str.area, pmatch);
+		if ((int)max < 0) {
+			free_trash_chunk(output);
+			break;
+		}
+		output->data = max;
 
 		/* If too many data to copy try to get a larger chunk */
 		if (output->data > b_room(trash)) {
@@ -4019,25 +4023,25 @@ static int sample_conv_when(const struct arg *arg_p, struct sample *smp, void *p
 		    ((strm->flags & SF_REDISP) ||
 		     ((strm->flags & SF_ERR_MASK) > SF_ERR_LOCAL) ||
 		     (((strm->flags & SF_ERR_MASK) == SF_ERR_NONE) && strm->conn_retries) ||
-		     ((sess->fe->mode == PR_MODE_HTTP) && strm->txn && strm->txn->status >= 500)))
+		     ((sess->fe->mode == PR_MODE_HTTP) && strm->txn.http && strm->txn.http->status >= 500)))
 			ret = 1;
 		break;
 
 	case WHEN_COND_FORWARDED: // true if forwarded to a connection
-		ret = !!sc_conn(smp->strm->scb);
+		ret = strm && !!sc_conn(strm->scb);
 		break;
 
 	case WHEN_COND_TOAPPLET:  // true if handled as an applet
-		ret = !!sc_appctx(smp->strm->scb);
+		ret = strm && !!sc_appctx(strm->scb);
 		break;
 
 	case WHEN_COND_PROCESSED: // true if forwarded or appctx
-		ret = sc_conn(smp->strm->scb) || sc_appctx(smp->strm->scb);
+		ret = strm && (sc_conn(strm->scb) || sc_appctx(strm->scb));
 		break;
 
 	case WHEN_COND_ACL: // true if the ACL pointed to by args[2] evaluates to true
 		acl_sample = arg_p[2].data.ptr;
-		ret = acl_exec_cond(&acl_sample->cond, smp->px, smp->sess, smp->strm, smp->opt) == ACL_TEST_PASS;
+		ret = acl_exec_cond(&acl_sample->cond, smp->px, smp->sess, strm, smp->opt) == ACL_TEST_PASS;
 		break;
 	}
 
@@ -4110,6 +4114,7 @@ static int check_when_cond(struct arg *args, struct sample_conv *conv,
 		if (!(acl_sample->terms[0].acl = find_acl_by_name(args[1].data.str.area, &curproxy->acl)) &&
 		    !(acl_sample->terms[0].acl = find_acl_default(args[1].data.str.area, &curproxy->acl, err, NULL, NULL, 0))) {
 			memprintf(err, "ACL '%s' not found", args[1].data.str.area);
+			free(acl_sample);
 			return 0;
 		}
 
@@ -5058,7 +5063,7 @@ smp_fetch_pid(const struct arg *args, struct sample *smp, const char *kw, void *
 }
 
 
-/* returns the number of the current process (between 1 and nbproc */
+/* returns the number of the current process (between 1 and nbproc) */
 static int
 smp_fetch_proc(const struct arg *args, struct sample *smp, const char *kw, void *private)
 {
@@ -5067,12 +5072,58 @@ smp_fetch_proc(const struct arg *args, struct sample *smp, const char *kw, void 
 	return 1;
 }
 
-/* returns the number of the current thread (between 1 and nbthread */
+/* returns the number of the current thread (between 0 and nbthread-1) */
 static int
 smp_fetch_thread(const struct arg *args, struct sample *smp, const char *kw, void *private)
 {
 	smp->data.type = SMP_T_SINT;
 	smp->data.u.sint = tid;
+	return 1;
+}
+
+/* returns the number of the current thread group (between 0 and nbtgroups-1) */
+static int
+smp_fetch_tgroup(const struct arg *args, struct sample *smp, const char *kw, void *private)
+{
+	smp->data.type = SMP_T_SINT;
+	smp->data.u.sint = tgid - 1; // tgid starts at 1
+	return 1;
+}
+
+/* returns the last known CPU usage of the current thread */
+static int
+smp_fetch_cpu_usage_thr(const struct arg *args, struct sample *smp, const char *kw, void *private)
+{
+	smp->data.type = SMP_T_SINT;
+	smp->data.u.sint = 100 - th_ctx->idle_pct;
+	return 1;
+}
+
+/* returns the last known CPU usage of the current thread group */
+static int
+smp_fetch_cpu_usage_grp(const struct arg *args, struct sample *smp, const char *kw, void *private)
+{
+	uint thr, tot = 0;
+
+	for (thr = 0; thr < ha_tgroup_info[tgid - 1].count; thr++)
+		tot += 100 - ha_thread_ctx[ha_tgroup_info[tgid - 1].base + thr].idle_pct;
+
+	smp->data.type = SMP_T_SINT;
+	smp->data.u.sint = (tot + thr / 2) / thr;
+	return 1;
+}
+
+/* returns the last known CPU usage of the whole process */
+static int
+smp_fetch_cpu_usage_proc(const struct arg *args, struct sample *smp, const char *kw, void *private)
+{
+	int thr, tot = 0;
+
+	for (thr = 0; thr < global.nbthread; thr++)
+		tot += 100 - ha_thread_ctx[thr].idle_pct;
+
+	smp->data.type = SMP_T_SINT;
+	smp->data.u.sint = (tot + thr / 2) / thr;
 	return 1;
 }
 
@@ -5609,8 +5660,8 @@ static int sample_conv_bytes_check(struct arg *args, struct sample_conv *conv,
 }
 
 static struct sample_fetch_kw_list smp_logs_kws = {ILH, {
-	{ "bytes_in",             smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
-	{ "bytes_out",            smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "bytes_in",             smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RQFIN },
+	{ "bytes_out",            smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RSFIN },
 
 	{ "txn.timer.total",      smp_fetch_txn_timers,   0,         NULL, SMP_T_SINT, SMP_USE_TXFIN }, /* "Ta" */
 	{ "txn.timer.user",       smp_fetch_txn_timers,   0,         NULL, SMP_T_SINT, SMP_USE_TXFIN }, /* "Tu" */
@@ -5622,14 +5673,14 @@ static struct sample_fetch_kw_list smp_logs_kws = {ILH, {
 	{ "fc.timer.handshake",   smp_fetch_conn_timers,  0,         NULL, SMP_T_SINT, SMP_USE_L4CLI }, /* "Th" */
 	{ "fc.timer.total",       smp_fetch_conn_timers,  0,         NULL, SMP_T_SINT, SMP_USE_SSFIN }, /* "Tt" */
 
-	{ "req.bytes_in",         smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
-	{ "req.bytes_out",        smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "req.bytes_in",         smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RQFIN },
+	{ "req.bytes_out",        smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RQFIN },
 	{ "req.timer.idle",       smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_HRQHV }, /* "Ti" */
 	{ "req.timer.tq",         smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_HRQHV }, /* "Tq" */
 	{ "req.timer.hdr",        smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_HRQHV }, /* "TR" */
 	{ "req.timer.queue",      smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_L4SRV }, /* "Tw" */
-	{ "res.bytes_in",         smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
-	{ "res.bytes_out",        smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "res.bytes_in",         smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RSFIN },
+	{ "res.bytes_out",        smp_fetch_bytes,        0,         NULL, SMP_T_SINT, SMP_USE_RSFIN },
 	{ "res.timer.data",       smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_RSFIN }, /* "Td" */
 	{ "res.timer.hdr",        smp_fetch_reX_timers,   0,         NULL, SMP_T_SINT, SMP_USE_HRSHV }, /* "Tr" */
 	{ /* END */ },
@@ -5655,6 +5706,7 @@ static struct sample_fetch_kw_list smp_kws = {ILH, {
 	{ "proc",         smp_fetch_proc,  0,            NULL, SMP_T_SINT, SMP_USE_CONST },
 	{ "quic_enabled", smp_fetch_quic_enabled, 0,     NULL, SMP_T_BOOL, SMP_USE_CONST },
 	{ "thread",       smp_fetch_thread,  0,          NULL, SMP_T_SINT, SMP_USE_CONST },
+	{ "tgroup",       smp_fetch_tgroup,  0,          NULL, SMP_T_SINT, SMP_USE_CONST },
 	{ "rand",         smp_fetch_rand,  ARG1(0,SINT), NULL, SMP_T_SINT, SMP_USE_CONST },
 	{ "stopping",     smp_fetch_stopping, 0,         NULL, SMP_T_BOOL, SMP_USE_INTRN },
 	{ "uptime",       smp_fetch_uptime,   0,         NULL, SMP_T_SINT, SMP_USE_CONST },
@@ -5663,6 +5715,9 @@ static struct sample_fetch_kw_list smp_kws = {ILH, {
 	{ "cpu_calls",    smp_fetch_cpu_calls,  0,       NULL, SMP_T_SINT, SMP_USE_INTRN },
 	{ "cpu_ns_avg",   smp_fetch_cpu_ns_avg, 0,       NULL, SMP_T_SINT, SMP_USE_INTRN },
 	{ "cpu_ns_tot",   smp_fetch_cpu_ns_tot, 0,       NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "cpu_usage_grp", smp_fetch_cpu_usage_grp,  0,  NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "cpu_usage_proc",smp_fetch_cpu_usage_proc, 0,  NULL, SMP_T_SINT, SMP_USE_INTRN },
+	{ "cpu_usage_thr", smp_fetch_cpu_usage_thr,  0,  NULL, SMP_T_SINT, SMP_USE_INTRN },
 	{ "lat_ns_avg",   smp_fetch_lat_ns_avg, 0,       NULL, SMP_T_SINT, SMP_USE_INTRN },
 	{ "lat_ns_tot",   smp_fetch_lat_ns_tot, 0,       NULL, SMP_T_SINT, SMP_USE_INTRN },
 

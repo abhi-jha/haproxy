@@ -17,7 +17,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
-#include "include.h"
+#include "../include/include.h"
 
 
 #ifdef DEBUG_OT
@@ -261,7 +261,7 @@ int flt_ot_http_header_set(struct channel *chn, const char *prefix, const char *
 	if (value == NULL) {
 		/* Do nothing. */
 	}
-	else if (http_add_header(htx, ist_name, ist(value)) == 1) {
+	else if (http_add_header(htx, ist_name, ist(value), 1) == 1) {
 		retval = 0;
 
 		FLT_OT_DBG(3, "HTTP header '%s: %s' added", ist_name.ptr, value);

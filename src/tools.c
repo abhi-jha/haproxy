@@ -3070,20 +3070,20 @@ size_t my_memspn(const void *str, size_t len, const void *accept, size_t acceptl
 {
 	size_t ret = 0;
 
-	while (ret < len && memchr(accept, *((int *)str), acceptlen)) {
+	while (ret < len && memchr(accept, *((const unsigned char *)str), acceptlen)) {
 		str++;
 		ret++;
 	}
 	return ret;
 }
 
-/* get length of the initial segment consisting entirely of bytes not in <rejcet> */
+/* get length of the initial segment consisting entirely of bytes not in <reject> */
 size_t my_memcspn(const void *str, size_t len, const void *reject, size_t rejectlen)
 {
 	size_t ret = 0;
 
 	while (ret < len) {
-		if(memchr(reject, *((int *)str), rejectlen))
+		if (memchr(reject, *((const unsigned char *)str), rejectlen))
 			return ret;
 		str++;
 		ret++;
@@ -3592,7 +3592,7 @@ unsigned int mask_find_rank_bit(unsigned int r, unsigned long m)
 	t  = (m >> (s - 1)) & 0x1;
 	s -= ((t - r) & 256) >> 8;
 
-       return s - 1;
+	return s - 1;
 }
 
 /* Same as mask_find_rank_bit() above but makes use of pre-computed bitmaps
@@ -4678,10 +4678,8 @@ char *memvprintf(char **out, const char *format, va_list orig_args)
 		ha_free(&ret);
 	}
 
-	if (out) {
-		free(*out);
-		*out = ret;
-	}
+	free(*out);
+	*out = ret;
 
 	return ret;
 }
@@ -4746,7 +4744,8 @@ char *indent_msg(char **out, int level)
 	needed = 1 + level * (lf + 1) + len + 1;
 	p = ret = malloc(needed);
 	if (unlikely(!ret))
-		return NULL;
+		goto leave;
+
 	in = *out;
 
 	/* skip initial LFs */
@@ -4766,6 +4765,7 @@ char *indent_msg(char **out, int level)
 	}
 	*p = 0;
 
+ leave:
 	free(*out);
 	*out = ret;
 
@@ -6139,7 +6139,7 @@ void collect_libs(void)
 		page += pagesize;
 		/* copy and make read-only */
 		memcpy(page, ctx.storage, ctx.size);
-		mprotect(page, lib_size, PROT_READ);
+		mprotect(page, new_size, PROT_READ);
 		vma_set_name(page, new_size, "archive", "boot-libs");
 
 		lib_storage = page;
@@ -6970,11 +6970,10 @@ void update_word_fingerprint_with_len(uint8_t *fp, struct ist word)
 	int c;
 
 	from = 28; // begin
-	for (p = word.ptr; p < word.ptr + word.len; p++) {
+	for (p = word.ptr; p < istend(word); p++) {
 		c = tolower((unsigned char)*p);
 		switch(c) {
 		case 'a'...'z': to = c - 'a' + 1; break;
-		case 'A'...'Z': to = tolower((unsigned char )c) - 'a' + 1; break;
 		case '0'...'9': to = 27; break;
 		default:        to = 28; break;
 		}
@@ -7072,9 +7071,8 @@ const char *hash_ipanon(uint32_t scramble, char *ipstring, int hasport)
 	int port;
 
 	index_hash++;
-        if (index_hash == NB_L_HASH_WORD) {
-                index_hash = 0;
-	}
+	if (index_hash == NB_L_HASH_WORD)
+		index_hash = 0;
 
 	if (scramble == 0) {
 		return ipstring;
@@ -7155,7 +7153,7 @@ const char *hash_ipanon(uint32_t scramble, char *ipstring, int hasport)
 /* Initialize array <fp> with the fingerprint of word <word> by counting the
  * transitions between characters. <fp> is a 1024-entries array indexed as
  * 32*from+to. Positions for 'from' and 'to' are:
- *   0..25=letter, 26=digit, 27=other, 28=begin, 29=end, others unused.
+ *   1..26=letter, 27=digit, 28=other/begin/end.
  */
 void make_word_fingerprint(uint8_t *fp, const char *word)
 {
@@ -7166,7 +7164,7 @@ void make_word_fingerprint(uint8_t *fp, const char *word)
 /* Initialize array <fp> with the fingerprint of word <word> by counting the
  * transitions between characters. <fp> is a 1024-entries array indexed as
  * 32*from+to. Positions for 'from' and 'to' are:
- *   0..25=letter, 26=digit, 27=other, 28=begin, 29=end, others unused.
+ *   1..26=letter, 27=digit, 28=other/begin/end.
  */
 void make_word_fingerprint_with_len(uint8_t *fp, struct ist word)
 {
@@ -7562,6 +7560,12 @@ int backup_env(void)
 		if (*tmp == NULL) {
 			ha_alert("Cannot allocate memory to backup env variable '%s'.\n",
 				 *env);
+			tmp = init_env;
+			while (*tmp) {
+				free(*tmp);
+				tmp++;
+			}
+			ha_free(&init_env);
 			return -1;
 		}
 		tmp++;
@@ -7756,8 +7760,7 @@ void ha_freearray(char ***array)
 	char **r = *array;
 
 	for (i = 0; r && r[i]; i++) {
-		free(r[i]);
-		r[i] = NULL;
+		ha_free(&r[i]);
 	}
 	*array = NULL;
 }

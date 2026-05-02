@@ -72,8 +72,14 @@ struct htx_blk *htx_defrag(struct htx *htx, struct htx_blk *blk, uint32_t blkinf
 				}
 				__fallthrough;
 			default:
-				newblk = htx_add_blk(tmp, type, blksz);
-				newblk->info = oldblk->info;
+				if (blk == oldblk && blkinfo) {
+					newblk = htx_add_blk(tmp, type, __htx_blkinfo_size(blkinfo));
+					newblk->info = blkinfo;
+				}
+				else {
+					newblk = htx_add_blk(tmp, type, blksz);
+					newblk->info = oldblk->info;
+				}
 				htx_memcpy(htx_get_blk_ptr(tmp, newblk), htx_get_blk_ptr(htx, oldblk), blksz);
 				break;
 		};
@@ -83,15 +89,13 @@ struct htx_blk *htx_defrag(struct htx *htx, struct htx_blk *blk, uint32_t blkinf
 			tmp->first = new;
 
 		/* if <blk> is defined, save its new position */
-		if (blk != NULL && blk == oldblk) {
-			if (blkinfo)
-				newblk->info = blkinfo;
+		if (blk == oldblk)
 			blkpos = new;
-		}
+
 		new++;
 	}
 
-	BUG_ON(htx->data != tmp->data);
+	htx->data = tmp->data;
 	htx->first = tmp->first;
 	htx->head = tmp->head;
 	htx->tail = tmp->tail;
@@ -714,8 +718,6 @@ struct htx_blk *htx_replace_blk_value(struct htx *htx, struct htx_blk *blk,
 		/* finally copy data */
 		htx_memcpy(htx_get_blk_ptr(htx, blk), b_orig(chunk), b_data(chunk));
 		free_trash_chunk(chunk);
-
-		htx->data += delta;
 	}
 	return blk;
 }
@@ -761,8 +763,7 @@ size_t htx_xfer(struct htx *dst, struct htx *src, size_t count, unsigned int fla
 		switch (type) {
 		case HTX_BLK_DATA:
 			v = htx_get_blk_value(src, blk);
-			if (v.len > max)
-				v.len = max;
+			v = isttrim(v, max);
 			v.len = htx_add_data(dst, v);
 			if (!v.len) {
 				dst_full = 1;
@@ -819,10 +820,10 @@ size_t htx_xfer(struct htx *dst, struct htx *src, size_t count, unsigned int fla
 
 		/* the last copied block is a start-line, a header or a trailer */
 		if (type == HTX_BLK_REQ_SL || type == HTX_BLK_RES_SL || type == HTX_BLK_HDR || type == HTX_BLK_TLR) {
-			/* <src > cannot have partial headers or trailers part */
+			/* <src> cannot have partial headers or trailers part */
 			BUG_ON(blk == NULL);
 
-			/* Remove partial headers/trailers from <dst> and rollback on <str> to not remove them later */
+			/* Remove partial headers/trailers from <dst> and rollback on <src> to not remove them later */
 			while (type == HTX_BLK_REQ_SL || type == HTX_BLK_RES_SL || type == HTX_BLK_HDR || type == HTX_BLK_TLR) {
 				BUG_ON(type != htx_get_blk_type(blk));
 				ret -= sizeof(*blk) + htx_get_blksz(blk);
@@ -908,8 +909,7 @@ struct htx_ret htx_xfer_blks(struct htx *dst, struct htx *src, uint32_t count,
 		switch (type) {
 			case HTX_BLK_DATA:
 				v = htx_get_blk_value(src, blk);
-				if (v.len > max)
-					v.len = max;
+				v = isttrim(v, max);
 				v.len = htx_add_data(dst, v);
 				if (!v.len)
 					goto stop;

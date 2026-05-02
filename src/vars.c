@@ -320,7 +320,7 @@ static int vars_fill_desc(const char *name, int len, struct var_desc *desc, char
 		desc->scope = SCOPE_CHECK;
 	}
 	else {
-		memprintf(err, "invalid variable name '%.*s'. A variable name must be start by its scope. "
+		memprintf(err, "invalid variable name '%.*s'. A variable name must start with its scope. "
 		               "The scope can be 'proc', '(p)sess', '(p)txn', '(p)req', '(p)res' or 'check'", len, name);
 		return 0;
 	}
@@ -328,7 +328,7 @@ static int vars_fill_desc(const char *name, int len, struct var_desc *desc, char
 	/* Check variable name syntax. */
 	for (tmp = name; tmp < name + len; tmp++) {
 		if (!isalnum((unsigned char)*tmp) && *tmp != '_' && *tmp != '.') {
-			memprintf(err, "invalid syntax at char '%s'", tmp);
+			memprintf(err, "invalid syntax at char '%c'", *tmp);
 			return 0;
 		}
 	}
@@ -1050,7 +1050,6 @@ static enum act_return action_store(struct act_rule *rule, struct proxy *px,
 		smp_set_owner(&smp, px, sess, s, 0);
 		smp.data.type = SMP_T_STR;
 		smp.data.u.str = *fmtstr;
-		var_set(&rule->arg.vars.desc, &smp, rule->arg.vars.conditions);
 	}
 	else {
 		/* an expression is used */
@@ -1271,7 +1270,7 @@ static enum act_parse_ret parse_store(const char **args, int *arg, struct proxy 
 
 	if (rule->arg.vars.desc.scope == SCOPE_PROC &&
 	    !var_set(&rule->arg.vars.desc, &empty_smp, VF_CREATEONLY|VF_PERMANENT))
-		return 0;
+		return ACT_RET_PRS_ERR;
 
 	/* There is no fetch method when variable is unset. Just set the right
 	 * action and return. */

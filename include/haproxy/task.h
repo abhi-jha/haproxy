@@ -554,6 +554,7 @@ static inline struct task *task_init(struct task *t, int tid)
 	t->wake_date = 0;
 	t->expire = TICK_ETERNITY;
 	t->caller = NULL;
+	t->last_run = 0;
 	return t;
 }
 
@@ -569,6 +570,7 @@ static inline void tasklet_init(struct tasklet *t)
 	t->tid = -1;
 	t->wake_date = 0;
 	t->caller = NULL;
+	t->last_run = 0;
 	LIST_INIT(&t->list);
 }
 
@@ -705,18 +707,36 @@ static inline void tasklet_set_tid(struct tasklet *tl, int tid)
 
 static inline void _task_schedule(struct task *task, int when, const struct ha_caller *caller)
 {
-	/* TODO: mthread, check if there is no tisk with this test */
+	/* TODO: mthread, check if there is no task with this test */
 	if (task_in_rq(task))
 		return;
 
 #ifdef USE_THREAD
 	if (task->tid < 0) {
+		/*
+		 * If the task is already running, then just wake it up, just
+		 * in case it did not notice it should reschedule itself.
+		 * There is nothing else we can do, if it runs it may
+		 * overwrite the expire field, so we can't just set it, and
+		 * we can afford to wait until it is no longer running, just
+		 * in case we are currently holding a lock, and the running
+		 * task tries to acquire that lock.
+		 * Tasks are supposed to take care of their own scheduling if
+		 * needed anyway, we already do nothing if the task is in the
+		 * runqueue, so it should be okay.
+		 */
+		if (HA_ATOMIC_FETCH_OR(&task->state, TASK_RUNNING) & TASK_RUNNING) {
+			task_wakeup(task, TASK_WOKEN_OTHER);
+			return;
+		}
+
 		/* FIXME: is it really needed to lock the WQ during the check ? */
 		HA_RWLOCK_WRLOCK(TASK_WQ_LOCK, &wq_lock);
 		if (task_in_wq(task))
 			when = tick_first(when, task->expire);
 
 		task->expire = when;
+		task_drop_running(task, 0);
 		if (!task_in_wq(task) || tick_is_lt(task->expire, task->wq.key)) {
 			if (likely(caller)) {
 				caller = HA_ATOMIC_XCHG(&task->caller, caller);

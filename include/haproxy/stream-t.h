@@ -90,6 +90,11 @@
 #define SF_BC_MARK      0x01000000	/* need to set specific mark on backend/srv conn upon connect */
 #define SF_BC_TOS       0x02000000	/* need to set specific tos on backend/srv conn upon connect */
 #define SF_RULE_FYIELD  0x04000000      /* s->current_rule set because of forced yield */
+/* unused: 0x08000000 */
+#define SF_TXN_NONE     0x00000000      /* No transaction allocated */
+#define SF_TXN_HTTP     0x10000000      /* HTTP transaction allocated */
+#define SF_TXN_PCLI     0x20000000      /* PCLI transaction allocated */
+#define SF_TXN_MASK     0x30000000      /* mask to get the transaction type */
 
 /* This function is used to report flags in debugging tools. Please reflect
  * below any single-bit flag addition above in the same order via the
@@ -122,6 +127,8 @@ static forceinline char *strm_show_flags(char *buf, size_t len, const char *deli
 	_(SF_DIRECT, _(SF_ASSIGNED, _(SF_MAYALLOC, _(SF_BE_ASSIGNED, _(SF_FORCE_PRST,
 	_(SF_MONITOR, _(SF_CURR_SESS, _(SF_CONN_EXP, _(SF_REDISP,
 	_(SF_IGNORE, _(SF_REDIRECTABLE, _(SF_HTX))))))))))));
+
+	_e(SF_TXN_MASK, SF_TXN_HTTP,  _e(SF_TXN_MASK, SF_TXN_PCLI));
 
 	/* epilogue */
 	_(~0U);
@@ -210,6 +217,7 @@ struct session;
 struct server;
 struct task;
 struct sockaddr_storage;
+struct pcli_txn;
 
 /* some external definitions */
 struct strm_logs {
@@ -256,7 +264,10 @@ struct stream {
 	struct server *srv_conn;        /* stream already has a slot on a server and is not in queue */
 	struct pendconn *pend_pos;      /* if not NULL, points to the pending position in the pending queue */
 
-	struct http_txn *txn;           /* current HTTP transaction being processed. Should become a list. */
+	union {
+		struct http_txn *http;  /* current HTTP transaction being processed. Should become a list. */
+		struct pcli_txn *pcli;  /* current PCLI transaction */
+	} txn;
 
 	struct task *task;              /* the task associated with this stream */
 	unsigned int pending_events;	/* the pending events not yet processed by the stream but handled by process_stream() */
@@ -310,10 +321,6 @@ struct stream {
 	               struct log_orig origin);
 	void (*srv_error)(struct stream *s,     /* the function to call upon unrecoverable server errors (or NULL) */
 			  struct stconn *sc);
-
-	int pcli_next_pid;                      /* next target PID to use for the CLI proxy */
-	int pcli_flags;                         /* flags for CLI proxy */
-	char pcli_payload_pat[8];               /* payload pattern for the CLI proxy */
 
 	struct ist unique_id;                   /* custom unique ID */
 

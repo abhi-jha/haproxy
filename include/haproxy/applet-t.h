@@ -107,7 +107,7 @@ struct appctx {
 	enum obj_type obj_type;    /* OBJ_TYPE_APPCTX */
 	/* 3 unused bytes here */
 	unsigned int st0;          /* Main applet state. May be used by any applet */
-	unsigned int st1;          /* Applet substate. Mau be used by any applet */
+	unsigned int st1;          /* Applet substate. May be used by any applet */
 
 	unsigned int flags;        /* APPCTX_FL_* */
 	struct buffer inbuf;
@@ -120,13 +120,13 @@ struct appctx {
 
 	struct {
 		struct buffer *cmdline;     /* used to store unfinished commands */
+		struct buffer payload;      /* used to store the payload */
 
 		int severity_output;    /* used within the cli_io_handler to format severity output of informational feedback */
 		int level;              /* the level of CLI which can be lowered dynamically */
-		char payload_pat[8];    /* Payload pattern */
-		char *payload;          /* Pointer on the payload. NULL if no payload */
+		char *payload_pat;      /* Pointer to the payload pattern. NULL if no payload */
+		uint32_t max_payload_sz;/* Max size allowed for dynamic payload. 0 if not allowed */
 		uint32_t anon_key;      /* the key to anonymise with the hash in cli */
-		/* XXX 4 unused bytes here */
 		int (*io_handler)(struct appctx *appctx);  /* used within the cli_io_handler when st0 = CLI_ST_CALLBACK */
 		void (*io_release)(struct appctx *appctx); /* used within the cli_io_handler when st0 = CLI_ST_CALLBACK,
 							      if the command is terminated or the session released */
@@ -148,7 +148,6 @@ struct appctx {
 	/* here we have the service's context (CLI command, applet, etc) */
 	void *svcctx;                            /* pointer to a context used by the command, e.g. <storage> below */
 	struct {
-		void *shadow;                    /* shadow of svcctx above, do not use! */
 		char storage[APPLET_MAX_SVCCTX]; /* storage of svcctx above */
 	} svc;                                   /* generic storage for most commands */
 };

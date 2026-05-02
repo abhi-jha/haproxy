@@ -364,7 +364,7 @@ static void chash_update_server_weight(struct server *srv)
  * of Mirrokni, Thorup, and Zadimoghaddam (arxiv:1608.01350), adapted for use with
  * unequal server weights.
  */
-int chash_server_is_eligible(struct server *s)
+static int chash_server_is_eligible(struct server *s)
 {
 	/* The total number of slots to allocate is the total number of outstanding requests
 	 * (including the one we're about to make) times the load-balance-factor, rounded up.
@@ -553,10 +553,10 @@ struct server *chash_get_next_server(struct proxy *p, struct server *srvtoavoid)
 }
 
 /* Allocates and initializes lb nodes for server <srv>. Returns < 0 on error.
- * This is called by chash_init_server_tree() as well as from srv_alloc_lb()
- * for runtime addition.
+ * This is called by chash_init_server_tree() as well as via the ops table
+ * from srv_alloc_lb() for runtime addition.
  */
-int chash_server_init(struct server *srv)
+static int chash_server_init(struct server *srv)
 {
 	int node;
 
@@ -573,7 +573,7 @@ int chash_server_init(struct server *srv)
 }
 
 /* Releases the allocated lb_nodes for this server */
-void chash_server_deinit(struct server *srv)
+static void chash_server_deinit(struct server *srv)
 {
 	ha_free(&srv->lb_nodes);
 }
@@ -584,18 +584,10 @@ void chash_server_deinit(struct server *srv)
  * uweight ratio.
  * Return 0 in case of success, -1 in case of allocation failure.
  */
-int chash_init_server_tree(struct proxy *p)
+static int chash_init_server_tree(struct proxy *p)
 {
 	struct server *srv;
 	struct eb_root init_head = EB_ROOT;
-
-	p->lbprm.set_server_status_up   = chash_set_server_status_up;
-	p->lbprm.set_server_status_down = chash_set_server_status_down;
-	p->lbprm.update_server_eweight  = chash_update_server_weight;
-	p->lbprm.server_init            = chash_server_init;
-	p->lbprm.server_deinit          = chash_server_deinit;
-	p->lbprm.server_take_conn = NULL;
-	p->lbprm.server_drop_conn = NULL;
 
 	p->lbprm.wdiv = BE_WEIGHT_SCALE;
 	for (srv = p->srv; srv; srv = srv->next) {
@@ -626,3 +618,12 @@ int chash_init_server_tree(struct proxy *p)
 	}
 	return 0;
 }
+
+const struct lb_ops lb_chash_ops = {
+	.proxy_init             = chash_init_server_tree,
+	.set_server_status_up   = chash_set_server_status_up,
+	.set_server_status_down = chash_set_server_status_down,
+	.update_server_eweight  = chash_update_server_weight,
+	.server_init            = chash_server_init,
+	.server_deinit          = chash_server_deinit,
+};

@@ -750,7 +750,7 @@ int assign_server(struct stream *s)
 
 			case BE_LB_HASH_URI:
 				/* URI hashing */
-				if (IS_HTX_STRM(s) && s->txn->req.msg_state >= HTTP_MSG_BODY) {
+				if (IS_HTX_STRM(s) && s->txn.http->req.msg_state >= HTTP_MSG_BODY) {
 					struct ist uri;
 
 					uri = htx_sl_req_uri(http_get_stline(htxbuf(&s->req.buf)));
@@ -768,20 +768,20 @@ int assign_server(struct stream *s)
 
 			case BE_LB_HASH_PRM:
 				/* URL Parameter hashing */
-				if (IS_HTX_STRM(s) && s->txn->req.msg_state >= HTTP_MSG_BODY) {
+				if (IS_HTX_STRM(s) && s->txn.http->req.msg_state >= HTTP_MSG_BODY) {
 					struct ist uri;
 
 					uri = htx_sl_req_uri(http_get_stline(htxbuf(&s->req.buf)));
 					srv = get_server_ph(s->be, uri.ptr, uri.len, prev_srv);
 
-					if (!srv && s->txn->meth == HTTP_METH_POST)
+					if (!srv && s->txn.http->meth == HTTP_METH_POST)
 						srv = get_server_ph_post(s, prev_srv);
 				}
 				break;
 
 			case BE_LB_HASH_HDR:
 				/* Header Parameter hashing */
-				if (IS_HTX_STRM(s) && s->txn->req.msg_state >= HTTP_MSG_BODY)
+				if (IS_HTX_STRM(s) && s->txn.http->req.msg_state >= HTTP_MSG_BODY)
 					srv = get_server_hh(s, prev_srv);
 				break;
 
@@ -1005,9 +1005,9 @@ int assign_server_and_queue(struct stream *s)
 			 */
 
 			if (prev_srv != objt_server(s->target)) {
-				if (s->txn && (s->txn->flags & TX_CK_MASK) == TX_CK_VALID) {
-					s->txn->flags &= ~TX_CK_MASK;
-					s->txn->flags |= TX_CK_DOWN;
+				if (s->txn.http && (s->txn.http->flags & TX_CK_MASK) == TX_CK_VALID) {
+					s->txn.http->flags &= ~TX_CK_MASK;
+					s->txn.http->flags |= TX_CK_DOWN;
 				}
 				s->flags |= SF_REDISP;
 				if (prev_srv->counters.shared.tg)
@@ -1115,8 +1115,8 @@ int assign_server_and_queue(struct stream *s)
 			 * To work around that, when a server is getting idle,
 			 * it will set the ready_srv field of the proxy.
 			 * Here, if ready_srv is non-NULL, we get that server,
-			 * and we attempt to switch its served from 0 to 1.
-			 * If it works, then we can just run, otherwise,
+			 * and we attempt to increment its served counter up to
+			 * maxconn. If it works, then we can just run, otherwise,
 			 * it means another stream will be running, and will
 			 * dequeue us eventually, so we can just do nothing.
 			 */
@@ -1438,7 +1438,6 @@ check_tgid:
 
 		if (reuse_mode == PR_O_REUSE_SAFE && conn->mux->flags & MX_FL_HOL_RISK) {
 			/* attach the connection to the session private list */
-			conn->owner = sess;
 			session_add_conn(sess, conn);
 		}
 		else {
@@ -1837,7 +1836,7 @@ int connect_server(struct stream *s)
 		DBG_TRACE_STATE("skip idle connections reuse: websocket stream", STRM_EV_STRM_PROC|STRM_EV_CS_ST, s);
 	}
 	else {
-		const int not_first_req = s->txn && s->txn->flags & TX_NOT_FIRST;
+		const int not_first_req = s->txn.http && s->txn.http->flags & TX_NOT_FIRST;
 		struct ist name = IST_NULL;
 		struct sample *name_smp;
 
@@ -2272,8 +2271,8 @@ int connect_server(struct stream *s)
 		s->flags |= SF_CURR_SESS;
 		count = _HA_ATOMIC_ADD_FETCH(&srv->cur_sess, 1);
 		COUNTERS_UPDATE_MAX(&srv->counters.cur_sess_max, count);
-		if (s->be->lbprm.server_take_conn)
-			s->be->lbprm.server_take_conn(srv);
+		if (s->be->lbprm.ops && s->be->lbprm.ops->server_take_conn)
+			s->be->lbprm.ops->server_take_conn(srv);
 	}
 
 	/* Now handle synchronously connected sockets. We know the stream connector

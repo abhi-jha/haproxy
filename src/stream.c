@@ -425,8 +425,6 @@ void *stream_new(struct session *sess, struct stconn *sc, struct buffer *input)
 	s->lat_time = s->cpu_time = 0;
 	s->call_rate.curr_tick = s->call_rate.curr_ctr = s->call_rate.prev_ctr = 0;
 	s->passes_connect = s->passes_stconn = s->passes_reqana = s->passes_resana = s->passes_propag = 0;
-	s->pcli_next_pid = 0;
-	s->pcli_flags = 0;
 	s->unique_id = IST_NULL;
 	s->parent = NULL;
 	if ((t = task_new_here()) == NULL)
@@ -546,7 +544,7 @@ void *stream_new(struct session *sess, struct stconn *sc, struct buffer *input)
 	s->scb->ioto = TICK_ETERNITY;
 	s->res.analyse_exp = TICK_ETERNITY;
 
-	s->txn = NULL;
+	s->txn.http = NULL;
 	s->hlua[0] = s->hlua[1] = NULL;
 
 	s->resolv_ctx.requester = NULL;
@@ -683,8 +681,10 @@ void stream_free(struct stream *s)
 	hlua_ctx_destroy(s->hlua[1]);
 	s->hlua[0] = s->hlua[1] = NULL;
 
-	if (s->txn)
+	if ((s->flags & SF_TXN_MASK) == SF_TXN_HTTP)
 		http_destroy_txn(s);
+	else if ((s->flags & SF_TXN_MASK) == SF_TXN_PCLI)
+		pcli_destroy_txn(s);
 
 	/* ensure the client-side transport layer is destroyed */
 	/* Be sure it is useless !! */
@@ -774,6 +774,7 @@ void stream_free(struct stream *s)
 		pool_flush(pool_head_buffer);
 		pool_flush(pool_head_large_buffer);
 		pool_flush(pool_head_http_txn);
+		pool_flush(pool_head_pcli_txn);
 		pool_flush(pool_head_requri);
 		pool_flush(pool_head_capture);
 		pool_flush(pool_head_stream);
@@ -1299,8 +1300,8 @@ static int process_switching_rules(struct stream *s, struct channel *req, int an
 	if (!(s->flags & SF_FINST_MASK))
 		s->flags |= SF_FINST_R;
 
-	if (s->txn)
-		s->txn->status = 500;
+	if ((s->flags & SF_TXN_MASK) == SF_TXN_HTTP)
+		s->txn.http->status = 500;
 	s->req.analysers &= AN_REQ_FLT_END;
 	s->req.analyse_exp = TICK_ETERNITY;
 	DBG_TRACE_DEVEL("leaving on error", STRM_EV_STRM_ANA|STRM_EV_STRM_ERR, s);
@@ -1594,7 +1595,7 @@ int stream_set_http_mode(struct stream *s, const struct mux_proto_list *mux_prot
 
 	s->req.analysers |= AN_REQ_WAIT_HTTP|AN_REQ_HTTP_PROCESS_FE;
 
-	if (unlikely(!s->txn && !http_create_txn(s)))
+	if (unlikely((s->flags & SF_TXN_MASK) != SF_TXN_HTTP && !http_create_txn(s)))
 		return 0;
 
 	conn = sc_conn(sc);
@@ -1913,8 +1914,8 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 	}
 
 	/* this data may be no longer valid, clear it */
-	if (s->txn)
-		memset(&s->txn->auth, 0, sizeof(s->txn->auth));
+	if ((s->flags & SF_TXN_MASK) == SF_TXN_HTTP)
+		memset(&s->txn.http->auth, 0, sizeof(s->txn.http->auth));
 
 	/* 1a: Check for low level timeouts if needed. We just set a flag on
 	 * stream connectors when their timeouts have expired.
@@ -2460,8 +2461,8 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 				s->conn_retries = 0;
 				if ((s->be->retry_type &~ PR_RE_CONN_FAILED) &&
 				    (s->be->mode == PR_MODE_HTTP) &&
-				    !(s->txn->flags & TX_D_L7_RETRY))
-					s->txn->flags |= TX_L7_RETRY;
+				    !(s->txn.http->flags & TX_D_L7_RETRY))
+					s->txn.http->flags |= TX_L7_RETRY;
 
 				if (proxy_abrt_close(s->be)) {
 					struct connection *conn = sc_conn(scf);
@@ -2774,10 +2775,10 @@ struct task *process_stream(struct task *t, void *context, unsigned int state)
 
 		stream_process_counters(s);
 
-		if (s->txn && s->txn->status) {
+		if ((s->flags & SF_TXN_MASK) == SF_TXN_HTTP && s->txn.http->status) {
 			int n;
 
-			n = s->txn->status / 100;
+			n = s->txn.http->status / 100;
 			if (n < 1 || n > 5)
 				n = 0;
 
@@ -2930,15 +2931,15 @@ void sess_change_server(struct stream *strm, struct server *newsrv)
 		stream_del_srv_conn(strm);
 		_HA_ATOMIC_DEC(&oldsrv->served);
 		__ha_barrier_atomic_store();
-		if (oldsrv->proxy->lbprm.server_drop_conn)
-			oldsrv->proxy->lbprm.server_drop_conn(oldsrv);
+		if (oldsrv->proxy->lbprm.ops && oldsrv->proxy->lbprm.ops->server_drop_conn)
+			oldsrv->proxy->lbprm.ops->server_drop_conn(oldsrv);
 	}
 
 	if (newsrv) {
 		_HA_ATOMIC_INC(&newsrv->proxy->served);
 		__ha_barrier_atomic_store();
-		if (newsrv->proxy->lbprm.server_take_conn)
-			newsrv->proxy->lbprm.server_take_conn(newsrv);
+		if (newsrv->proxy->lbprm.ops && newsrv->proxy->lbprm.ops->server_take_conn)
+			newsrv->proxy->lbprm.ops->server_take_conn(newsrv);
 		stream_add_srv_conn(strm, newsrv);
 	}
 }
@@ -3082,32 +3083,6 @@ static void init_stream()
 		LIST_INIT(&ha_thread_ctx[thr].streams);
 }
 INITCALL0(STG_INIT, init_stream);
-
-/* Generates a unique ID based on the given <format>, stores it in the given <strm> and
- * returns the unique ID.
- *
- * If this function fails to allocate memory IST_NULL is returned.
- *
- * If an ID is already stored within the stream nothing happens existing unique ID is
- * returned.
- */
-struct ist stream_generate_unique_id(struct stream *strm, struct lf_expr *format)
-{
-	if (isttest(strm->unique_id)) {
-		return strm->unique_id;
-	}
-	else {
-		char *unique_id;
-
-		if ((unique_id = pool_alloc(pool_head_uniqueid)) == NULL)
-			return IST_NULL;
-
-		strm->unique_id = ist2(unique_id, 0);
-		strm->unique_id.len = build_logline(strm, unique_id, UNIQUEID_LEN, format);
-
-		return strm->unique_id;
-	}
-}
 
 /************************************************************************/
 /*           All supported ACL keywords must be declared here.          */
@@ -3653,14 +3628,17 @@ static void __strm_dump_to_buffer(struct buffer *buf, const struct show_sess_ctx
 		      " age=%s)\n",
 		      human_time(ns_to_sec(now_ns) - ns_to_sec(request_ts), 1));
 
-	if (strm->txn) {
+	if ((strm->flags & SF_TXN_MASK) == SF_TXN_HTTP) {
 		chunk_appendf(buf,
 		      "%s  txn=%p flags=0x%x meth=%d status=%d req.st=%s rsp.st=%s req.f=0x%02x rsp.f=0x%02x", pfx,
-		      strm->txn, strm->txn->flags, strm->txn->meth, strm->txn->status,
-		      h1_msg_state_str(strm->txn->req.msg_state), h1_msg_state_str(strm->txn->rsp.msg_state),
-		      strm->txn->req.flags, strm->txn->rsp.flags);
-		if (ctx && (ctx->flags & CLI_SHOWSESS_F_DUMP_URI) && strm->txn->uri)
-			chunk_appendf(buf, " uri=\"%s\"", HA_ANON_STR(anon_key, strm->txn->uri));
+		      strm->txn.http, strm->txn.http->flags,
+		      strm->txn.http->meth, strm->txn.http->status,
+		      h1_msg_state_str(strm->txn.http->req.msg_state),
+		      h1_msg_state_str(strm->txn.http->rsp.msg_state),
+		      strm->txn.http->req.flags, strm->txn.http->rsp.flags);
+		if (ctx && (ctx->flags & CLI_SHOWSESS_F_DUMP_URI) && strm->txn.http->uri)
+			chunk_appendf(buf, " uri=\"%s\"",
+				      HA_ANON_STR(anon_key, strm->txn.http->uri));
 		chunk_memcat(buf, "\n", 1);
 	}
 
@@ -4260,8 +4238,11 @@ static int cli_io_handler_dump_sess(struct appctx *appctx)
 		if (task_in_rq(curr_strm->task))
 			chunk_appendf(&trash, " run(nice=%d)", curr_strm->task->nice);
 
-		if ((ctx->flags & CLI_SHOWSESS_F_DUMP_URI) && curr_strm->txn && curr_strm->txn->uri)
-			chunk_appendf(&trash, " uri=\"%s\"", HA_ANON_CLI(curr_strm->txn->uri));
+		if ((ctx->flags & CLI_SHOWSESS_F_DUMP_URI) &&
+		    (curr_strm->flags & SF_TXN_MASK) == SF_TXN_HTTP &&
+		    curr_strm->txn.http->uri)
+			chunk_appendf(&trash, " uri=\"%s\"",
+				      HA_ANON_CLI(curr_strm->txn.http->uri));
 
 		chunk_appendf(&trash, "\n");
 

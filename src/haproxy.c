@@ -201,6 +201,7 @@ struct global global = {
 #endif
 		.nb_stk_ctr = MAX_SESS_STKCTR,
 		.default_shards = -2, /* by-group */
+		.cli_max_payload_sz = 128 * 1024,
 	},
 #ifdef USE_OPENSSL
 #ifdef DEFAULT_MAXSSLCONN
@@ -209,7 +210,7 @@ struct global global = {
 #endif
 	/* by default allow clients which use a privileged port for TCP only */
 	.clt_privileged_ports = HA_PROTO_TCP,
-	.maxthrpertgroup = MAX_THREADS_PER_GROUP,
+	.maxthrpertgroup = DEF_MAX_THREADS_PER_GROUP,
 	/* others NULL OK */
 };
 
