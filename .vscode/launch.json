@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug MyApp",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/haproxy",
+      "args": ["-f", "haproxy.cfg", "-db", "-V=1"],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb"
+    }
+  ]
+}

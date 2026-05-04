@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "make TARGET=linux-glibc DEBUG=-DDEBUG_FULL OPT_CFLAGS=-O0 ARCH_FLAGS=-g",
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
