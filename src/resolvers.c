@@ -864,7 +864,7 @@ static void resolv_check_response(struct resolv_resolution *res)
 			/* If not empty we try to match a server
 			 * in server state file tree with the same hostname
 			 */
-			if (!srvrq->named_servers) {
+			if (srvrq->named_servers) {
 				srv = NULL;
 
 				/* convert the key to lookup in lower case */
@@ -2103,6 +2103,7 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 	struct stream         *stream = NULL;
 	char **hostname_dn;
 	int   hostname_dn_len, query_type;
+	int req_was_new = 0;
 
 	enter_resolver_code();
 	switch (requester_type) {
@@ -2112,6 +2113,7 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 			if (!requester_locked)
 				HA_SPIN_LOCK(SERVER_LOCK, &srv->lock);
 
+			req_was_new = !srv->resolv_requester;
 			req = resolv_get_requester(&srv->resolv_requester,
 			                           &srv->obj_type,
 				                   snr_resolution_cb,
@@ -2137,6 +2139,7 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 		case OBJ_TYPE_SRVRQ:
 			srvrq           = (struct resolv_srvrq *)requester;
 
+			req_was_new = !srvrq->requester;
 			req = resolv_get_requester(&srvrq->requester,
 			                           &srvrq->obj_type,
 			                           snr_resolution_cb,
@@ -2153,6 +2156,7 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 		case OBJ_TYPE_STREAM:
 			stream          = (struct stream *)requester;
 
+			req_was_new = !stream->resolv_ctx.requester;
 			req = resolv_get_requester(&stream->resolv_ctx.requester,
 			                           &stream->obj_type,
 			                           act_resolution_cb,
@@ -2174,6 +2178,7 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 		case OBJ_TYPE_ACME_RSLV: {
 			struct acme_rslv *acme_rslv = (struct acme_rslv *)requester;
 
+			req_was_new = !acme_rslv->requester;
 			req = resolv_get_requester(&acme_rslv->requester,
 			                           &acme_rslv->obj_type,
 			                           acme_rslv->success_cb,
@@ -2203,9 +2208,36 @@ int resolv_link_resolution(void *requester, int requester_type, int requester_lo
 	leave_resolver_code();
 	return 0;
 
-  err:
+err:
 	if (res && LIST_ISEMPTY(&res->requesters))
 		resolv_free_resolution(res);
+	if (req_was_new) {
+		switch (requester_type) {
+			case OBJ_TYPE_SERVER:
+				srv->resolv_requester = NULL;
+				pool_free(resolv_requester_pool, req);
+				break;
+			case OBJ_TYPE_SRVRQ:
+				srvrq->requester = NULL;
+				pool_free(resolv_requester_pool, req);
+				break;
+			case OBJ_TYPE_STREAM:
+				stream->resolv_ctx.requester = NULL;
+				pool_free(resolv_requester_pool, req);
+				break;
+#if defined(HAVE_ACME)
+			case OBJ_TYPE_ACME_RSLV: {
+				struct acme_rslv *acme_rslv = (struct acme_rslv *)requester;
+				acme_rslv->requester = NULL;
+				pool_free(resolv_requester_pool, req);
+				break;
+			}
+#endif
+			default:
+				break;
+		}
+	}
+
 	leave_resolver_code();
 	return -1;
 }
@@ -3371,6 +3403,7 @@ enum act_parse_ret resolv_parse_do_resolve(const char **args, int *orig_arg, str
  do_resolve_parse_error:
 	ha_free(&rule->arg.resolv.varname);
 	ha_free(&rule->arg.resolv.resolvers_id);
+	ha_free(&rule->arg.resolv.opts);
 	memprintf(err, "Can't parse '%s'. Expects 'do-resolve(<varname>,<resolvers>[,<options>]) <expr>'. Available options are 'ipv4' and 'ipv6'",
 			args[cur_arg]);
 	return ACT_RET_PRS_ERR;
@@ -3417,7 +3450,6 @@ int check_action_do_resolve(struct act_rule *rule, struct proxy *px, char **err)
 void resolvers_setup_proxy(struct proxy *px)
 {
 	px->maxconn = 0;
-	px->conn_retries = 1;
 	px->conn_retries = 1; /* FIXME ignored since 91e785ed
 	                       * ("MINOR: stream: Rely on a per-stream max connection retries value")
 	                       * If this is really expected this should be set on the stream directly

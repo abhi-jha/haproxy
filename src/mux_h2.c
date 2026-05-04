@@ -3543,7 +3543,7 @@ static struct h2s *h2c_frt_handle_headers(struct h2c *h2c, struct h2s *h2s)
 				goto out;
 			}
 
-			error = h2c_dec_hdrs(h2c, h2s_rxbuf_tail(h2s), &h2s->flags, &body_len, NULL);
+			error = h2c_dec_hdrs(h2c, h2s_rxbuf_tail(h2s), &h2s->flags, &h2s->body_len, NULL);
 			/* unrecoverable error ? */
 			if (h2c->st0 >= H2_CS_ERROR) {
 				TRACE_USER("Unrecoverable error decoding H2 trailers", H2_EV_RX_FRAME|H2_EV_RX_HDR|H2_EV_STRM_NEW|H2_EV_STRM_END, h2c->conn, 0, h2s_rxbuf_tail(h2s));
@@ -5469,6 +5469,8 @@ do_leave:
 
 	h2c->task = NULL;
 	h2c_error(h2c, H2_ERR_NO_ERROR);
+
+	/* here we don't have any h2c left, let's kill all h2c-less streams */
 	h2_wake_some_streams(h2c, 0);
 
 	if (br_data(h2c->mbuf)) {
@@ -5515,11 +5517,8 @@ do_leave:
 		HA_SPIN_UNLOCK(IDLE_CONNS_LOCK, &idle_conns[tid].idle_conns_lock);
 	}
 
-	/* either we can release everything now or it will be done later once
-	 * the last stream closes.
-	 */
-	if (eb_is_empty(&h2c->streams_by_id))
-		h2_release(h2c);
+	/* now we're done */
+	h2_release(h2c);
 
 	TRACE_LEAVE(H2_EV_H2C_WAKE);
 	return NULL;
@@ -6287,6 +6286,9 @@ next_frame:
 	/* If an Extended CONNECT has been sent on this stream, set message flag
 	 * to convert 200 response to 101 htx response */
 	msgf |= (*flags & H2_SF_EXT_CONNECT_SENT) ? H2_MSGF_EXT_CONNECT: 0;
+
+	/* when dealing with trailers, we need to check the content-length */
+	msgf |= (*flags & H2_SF_DATA_CLEN) ? H2_MSGF_BODY_CL : 0;
 
 	if (*flags & H2_SF_HEADERS_RCVD)
 		goto trailers;
