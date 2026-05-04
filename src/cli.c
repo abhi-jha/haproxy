@@ -3269,8 +3269,34 @@ int pcli_parse_request(struct stream *s, struct channel *req, char **errmsg, int
 	if (!(pcli->flags & PCLI_F_PAYLOAD)) {
 		/* look for the '@@' prefix and intercept it if found */
 		ret = pcli_find_bidir_prefix(s, req, &p, end, errmsg, next_pid);
-		if (ret != 0) // success or failure
+		if (ret < 0) /* error */
 			goto end;
+		if (ret > 0) {
+			/* @@<pid> matched: apply access-level downgrade before
+			 * forwarding to the worker. The worker sockpair listener
+			 * defaults to ACCESS_LVL_ADMIN, so without this a
+			 * user/operator-level master-CLI client would inherit
+			 * admin rights on the worker side.
+			 */
+			if (pcli_has_level(s, ACCESS_LVL_ADMIN)) {
+				/* admin already, no downgrade needed */
+			} else if (pcli_has_level(s, ACCESS_LVL_OPER)) {
+				const char *cmd = "operator -;";
+				if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+					ret = -1;
+					goto end;
+				}
+				ret += strlen(cmd);
+			} else if (pcli_has_level(s, ACCESS_LVL_USER)) {
+				const char *cmd = "user -;";
+				if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+					ret = -1;
+					goto end;
+				}
+				ret += strlen(cmd);
+			}
+			goto end;
+		}
 
 		reql = p - str;
 		p = str;
@@ -3403,27 +3429,42 @@ int pcli_parse_request(struct stream *s, struct channel *req, char **errmsg, int
 		/* the mcli-debug-mode is only sent to the applet of the master */
 		if ((pcli->flags & ACCESS_MCLI_DEBUG) && *next_pid <= 0) {
 			const char *cmd = "mcli-debug-mode on -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 		if (pcli->flags & ACCESS_EXPERIMENTAL) {
 			const char *cmd = "experimental-mode on -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 		if (pcli->flags & ACCESS_EXPERT) {
 			const char *cmd = "expert-mode on -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 		if (pcli->flags & ACCESS_MCLI_SEVERITY_STR) {
 			const char *cmd = "set severity-output string -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 		if (pcli->flags & ACCESS_MCLI_SEVERITY_NB) {
 			const char *cmd = "set severity-output number -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 
@@ -3431,11 +3472,17 @@ int pcli_parse_request(struct stream *s, struct channel *req, char **errmsg, int
 			goto end;
 		} else if (pcli_has_level(s, ACCESS_LVL_OPER)) {
 			const char *cmd = "operator -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		} else if (pcli_has_level(s, ACCESS_LVL_USER)) {
 			const char *cmd = "user -;";
-			ci_insert(req, 0, cmd, strlen(cmd));
+			if (!ci_insert(req, 0, cmd, strlen(cmd))) {
+				ret = -1;
+				goto end;
+			}
 			ret += strlen(cmd);
 		}
 	}
