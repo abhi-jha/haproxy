@@ -182,7 +182,8 @@ enum h2_err {
 #define H2_MSGF_RSP_1XX        0x0010    // a 1xx ( != 101) HEADERS frame was received
 #define H2_MSGF_BODYLESS_RSP   0x0020    // response message is known to have no body
                                          // (response to HEAD request or 204/304 response)
-#define H2_MSGF_EXT_CONNECT    0x0040    // Extended CONNECT method from rfc 8441
+#define H2_MSGF_EXT_CONNECT    0x0040    // Extended CONNECT method from rfc 8441 is in use
+#define H2_MSGF_EXT_CONN_OK    0x0080    // Extended CONNECT is permitted
 
 #define H2_MAX_STREAM_ID       ((1U << 31) - 1)
 #define H2_MAX_FRAME_LEN       ((1U << 24) - 1)
@@ -331,6 +332,7 @@ static inline struct ist h2_phdr_to_ist(int phdr)
 	case H2_PHDR_IDX_SCHM: return ist(":scheme");
 	case H2_PHDR_IDX_STAT: return ist(":status");
 	case H2_PHDR_IDX_HOST: return ist("Host");
+	case H2_PHDR_IDX_PROT: return ist(":protocol");
 	default:               return ist(":UNKNOWN");
 	}
 }

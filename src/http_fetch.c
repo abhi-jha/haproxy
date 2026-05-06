@@ -447,8 +447,6 @@ static int smp_fetch_stver(const struct arg *args, struct sample *smp, const cha
 	smp->data.type = SMP_T_STR;
 	smp->data.u.str = *vsn;
 	return 1;
-
-	return 1;
 }
 
 /* 3. Check on Status Code. We manipulate integers here. */
@@ -682,9 +680,11 @@ static int smp_fetch_body(const struct arg *args, struct sample *smp, const char
 				if (!chk) {
 					smp->flags &= ~SMP_F_CONST;
 					chk = get_trash_chunk_sz(htx->data);
-					chunk_istcat(chk, body);
+					if (!chunk_istcat(chk, body))
+						return 0;
 				}
-				chunk_istcat(chk, htx_get_blk_value(htx, blk));
+				if (!chunk_istcat(chk, htx_get_blk_value(htx, blk)))
+					return 0;
 				body = ist2(b_orig(chk), b_data(chk));
 			}
 			else {
@@ -943,9 +943,12 @@ static int smp_fetch_hdr_names(const struct arg *args, struct sample *smp, const
 			continue;
 		n = htx_get_blk_name(htx, blk);
 
-		if (temp->data)
-			temp->area[temp->data++] = del;
-		chunk_istcat(temp, n);
+		if (temp->data) {
+			if (!chunk_memcat(temp, &del, 1))
+				return 0;
+		}
+		if (!chunk_istcat(temp, n))
+			return 0;
 	}
 
 	smp->data.type = SMP_T_STR;
@@ -1178,7 +1181,8 @@ static int smp_fetch_base(const struct arg *args, struct sample *smp, const char
 
 	/* OK we have the header value in ctx.value */
 	temp = get_trash_chunk();
-	chunk_istcat(temp, ctx.value);
+	if (!chunk_istcat(temp, ctx.value))
+		return 0;
 
 	/* now retrieve the path */
 	sl = http_get_stline(htx);
@@ -1194,8 +1198,10 @@ static int smp_fetch_base(const struct arg *args, struct sample *smp, const char
 				;
 		}
 
-		if (len && *(path.ptr) == '/')
-			chunk_memcat(temp, path.ptr, len);
+		if (len && *(path.ptr) == '/') {
+			if (!chunk_memcat(temp, path.ptr, len))
+				return 0;
+		}
 	}
 
 	smp->data.type = SMP_T_STR;
@@ -1460,14 +1466,16 @@ static int smp_fetch_http_auth_bearer(const struct arg *args, struct sample *smp
 		if (http_find_header(htx, hdr_name, &ctx, 0)) {
 			struct ist type = istsplit(&ctx.value, ' ');
 
+			/* no space was found or the space is the first character or no "Bearer" method */
+			if (!istlen(type) || istlen(type) == istlen(ctx.value) || !isteqi(type, ist("Bearer")))
+				return 0;
+
 			/* There must be "at least" one space character between
 			 * the scheme and the following value so ctx.value might
 			 * still have leading spaces here (see RFC7235).
 			 */
 			ctx.value = istskip(ctx.value, ' ');
-
-			if (isteqi(type, ist("Bearer")) && istlen(ctx.value))
-				chunk_initlen(&bearer_val, istptr(ctx.value), 0, istlen(ctx.value));
+			chunk_initlen(&bearer_val, istptr(ctx.value), 0, istlen(ctx.value));
 		}
 	}
 	else {
@@ -2115,9 +2123,11 @@ static int smp_fetch_body_param(const struct arg *args, struct sample *smp, cons
 					/* More than one DATA block we must use a trash */
 					if (!chk) {
 						chk = get_trash_chunk_sz(htx->data);
-						chunk_istcat(chk, body);
+						if (!chunk_istcat(chk, body))
+							break;
 					}
-					chunk_istcat(chk, htx_get_blk_value(htx, blk));
+					if (!chunk_istcat(chk, htx_get_blk_value(htx, blk)))
+						break;
 					body = ist2(b_orig(chk), b_data(chk));
 				}
 				else
@@ -2202,7 +2212,7 @@ static int smp_fetch_url32(const struct arg *args, struct sample *smp, const cha
 }
 
 /* This concatenates the source address with the 32-bit hash of the Host and
- * URL as returned by smp_fetch_base32(). The idea is to have per-source and
+ * URL as returned by smp_fetch_url32(). The idea is to have per-source and
  * per-url counters. The result is a binary block from 8 to 20 bytes depending
  * on the source address length. The URL hash is stored before the address so
  * that in environments where IPv6 is insignificant, truncating the output to
@@ -2422,7 +2432,7 @@ static struct sample_fetch_kw_list sample_fetch_keywords = {ILH, {
 	{ "url_ip",             smp_fetch_url_ip,             0,                NULL,    SMP_T_IPV4, SMP_USE_HRQHV },
 	{ "url_port",           smp_fetch_url_port,           0,                NULL,    SMP_T_SINT, SMP_USE_HRQHV },
 	{ "url_param",          smp_fetch_url_param,          ARG3(0,STR,STR,STR),  NULL,    SMP_T_STR,  SMP_USE_HRQHV },
-	{ "urlp"     ,          smp_fetch_url_param,          ARG3(0,STR,STR,STR),  NULL,    SMP_T_STR,  SMP_USE_HRQHV },
+	{ "urlp",               smp_fetch_url_param,          ARG3(0,STR,STR,STR),  NULL,    SMP_T_STR,  SMP_USE_HRQHV },
 	{ "urlp_val",           smp_fetch_url_param_val,      ARG3(0,STR,STR,STR),  NULL,    SMP_T_SINT, SMP_USE_HRQHV },
 
 	{ /* END */ },

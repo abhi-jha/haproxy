@@ -6665,9 +6665,7 @@ static void ssl_sock_setup_ktls(struct ssl_sock_ctx *ctx)
 	info.info.cipher_type = known_ciphers[i].tls_cipher;
 
 	if (is_tls_12) {
-		unsigned char iv[iv_size];
 		int block_key_size = 2 * key_size + 2 * salt_size;
-		int i;
 
 		/*
 		 * We may have to increase buf size if new ciphers are
@@ -6699,10 +6697,9 @@ static void ssl_sock_setup_ktls(struct ssl_sock_ctx *ctx)
 		 */
 		seq = SSL_get_read_sequence(ssl);
 		seq = my_htonll(seq);
-		for (i = 0; i < iv_size; i++)
-			iv[i] = (unsigned char)statistical_prng_range(256);
-		/* IV */
-		memcpy(&info.buf[0], &iv, iv_size);
+
+		/* Use the sequence number as the explicit nonce */
+		memcpy(&info.buf[0], &seq, iv_size);
 
 		if (!conn_is_back(ctx->conn)) {
 			/* Key */
@@ -6726,9 +6723,8 @@ static void ssl_sock_setup_ktls(struct ssl_sock_ctx *ctx)
 		 */
 		seq = SSL_get_write_sequence(ssl);
 		seq = my_htonll(seq);
-		for (i = 0; i < iv_size; i++)
-			iv[i] = (unsigned char)statistical_prng_range(256);
-		memcpy(&info.buf[0], &iv, iv_size);
+		/* Use the sequence number as the explicit nonce */
+		memcpy(&info.buf[0], &seq, iv_size);
 		if (!conn_is_back(ctx->conn)) {
 			/* Key */
 			memcpy(&info.buf[iv_size], &buf[key_size], key_size);

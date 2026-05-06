@@ -102,6 +102,11 @@ static void qcs_free(struct qcs *qcs)
 	sedesc_free(qcs->sd);
 	qcs->sd = NULL;
 
+	if (qcs->flags & QC_SF_HREQ_RECV) {
+		BUG_ON(!qcc->nb_hreq);
+		--qcc->nb_hreq;
+	}
+
 	/* Release app-layer context. */
 	if (qcs->ctx && qcc->app_ops->detach)
 		qcc->app_ops->detach(qcs);
@@ -223,7 +228,16 @@ static struct qcs *qcs_new(struct qcc *qcc, uint64_t id, enum qcs_type type)
 		}
 	}
 
-	if (qcc->app_ops->attach && qcc->app_ops->attach(qcs, qcc->ctx)) {
+	/* If app layer is closed, reset immediately a new stream if proto does
+	 * not implement graceful shutdown. Else proto is responsible to either
+	 * accept or reject the new stream via its attach() operation.
+	 */
+	if (qcc->app_st >= QCC_APP_ST_SHUT && !qcc->app_ops->shutdown) {
+		qcc_abort_stream_read(qcs);
+		qcc_reset_stream(qcs, 0, 0);
+		goto out;
+	}
+	else if (qcc->app_ops->attach && qcc->app_ops->attach(qcs, qcc->ctx)) {
 		TRACE_ERROR("app proto failure", QMUX_EV_QCS_NEW, qcc->conn, qcs);
 		goto err;
 	}
@@ -250,59 +264,40 @@ static forceinline void qcc_reset_idle_start(struct qcc *qcc)
 	qcc->idle_start = now_ms;
 }
 
+/* Return true if the mux timeout should be armed. */
+static inline int qcc_may_expire(struct qcc *qcc)
+{
+	return !qcc->nb_sc;
+}
+
 /* Decrement <qcc> sc. */
 static forceinline void qcc_rm_sc(struct qcc *qcc)
 {
 	BUG_ON(!qcc->nb_sc); /* Ensure sc count is always valid (ie >=0). */
 	--qcc->nb_sc;
-
-	/* Reset qcc idle start for http-keep-alive timeout. Timeout will be
-	 * refreshed after this on stream detach.
-	 */
-	if (!qcc->nb_sc && !qcc->nb_hreq)
-		qcc_reset_idle_start(qcc);
-}
-
-/* Decrement <qcc> hreq. */
-static forceinline void qcc_rm_hreq(struct qcc *qcc)
-{
-	BUG_ON(!qcc->nb_hreq); /* Ensure http req count is always valid (ie >=0). */
-	--qcc->nb_hreq;
-
-	/* Reset qcc idle start for http-keep-alive timeout. Timeout will be
-	 * refreshed after this on I/O handler.
-	 */
-	if (!qcc->nb_sc && !qcc->nb_hreq)
-		qcc_reset_idle_start(qcc);
 }
 
 static inline int qcc_is_dead(const struct qcc *qcc)
 {
-	/* Maintain connection if stream endpoints are still active. */
-	if (qcc->nb_sc)
+	/* Maintain connection if there is still request streams active. */
+	if (qcc->nb_hreq)
 		return 0;
 
 	/* Connection considered dead if either :
 	 * - remote error detected at transport level
 	 * - error detected locally
 	 * - MUX timeout expired
-	 * - app layer shut and all transfers done (FE side only - used for stream.max-total)
+	 * - app layer shut (FE side only - used for stream.max-total)
 	 * - new stream initiating definitely blocked (BE side only - used for H3 GOAWAY reception)
 	 */
 	if (qcc->flags & (QC_CF_ERR_CONN|QC_CF_ERRL_DONE) ||
 	    !qcc->task ||
-	    (!conn_is_back(qcc->conn) && !qcc->nb_hreq && qcc->app_st == QCC_APP_ST_SHUT) ||
-	    (conn_is_back(qcc->conn) && !qcc->nb_hreq && (qcc->flags & QC_CF_CONN_SHUT))) {
+	    (!conn_is_back(qcc->conn) && qcc->app_st == QCC_APP_ST_SHUT) ||
+	    (conn_is_back(qcc->conn) && (qcc->flags & QC_CF_CONN_SHUT))) {
 		return 1;
 	}
 
 	return 0;
-}
-
-/* Return true if the mux timeout should be armed. */
-static inline int qcc_may_expire(struct qcc *qcc)
-{
-	return !qcc->nb_sc;
 }
 
 /* Refresh the timeout on <qcc> if needed depending on its state. */
@@ -441,9 +436,6 @@ void qcs_close_local(struct qcs *qcs)
 
 	if (quic_stream_is_bidi(qcs->id)) {
 		qcs->st = (qcs->st == QC_SS_HREM) ? QC_SS_CLO : QC_SS_HLOC;
-
-		if (qcs->flags & QC_SF_HREQ_RECV)
-			qcc_rm_hreq(qcs->qcc);
 	}
 	else {
 		/* Only local uni streams are valid for this operation. */
@@ -1035,13 +1027,9 @@ int qcs_attach_sc(struct qcs *qcs, struct buffer *buf, char fin)
 		return -1;
 	}
 
-	/* QC_SF_HREQ_RECV must be set once for a stream. Else, nb_hreq counter
-	 * will be incorrect for the connection.
-	 */
-	BUG_ON_HOT(qcs->flags & QC_SF_HREQ_RECV);
-	qcs->flags |= QC_SF_HREQ_RECV;
+	/* QCS must be identified as request stream prior to stconn instantiation. */
+	BUG_ON(!(qcs->flags & QC_SF_HREQ_RECV));
 	++qcc->nb_sc;
-	++qcc->nb_hreq;
 	++qcc->tot_sc;
 
 	/* TODO duplicated from mux_h2 */
@@ -2526,6 +2514,12 @@ static void qcs_destroy(struct qcs *qcs)
 
 	qcs_free(qcs);
 
+	/* Rearm http-keep-alive timeout when last request stream is freed. */
+	if (!conn_is_back(qcc->conn) && qcc_may_expire(qcc) && !qcc->nb_hreq) {
+		qcc_reset_idle_start(qcc);
+		qcc_refresh_timeout(qcc);
+	}
+
 	TRACE_LEAVE(QMUX_EV_QCS_END, conn);
 }
 
@@ -3775,11 +3769,9 @@ static struct task *qcc_timeout_task(struct task *t, void *ctx, unsigned int sta
 	 * shutdown should occurs. For all other cases, an immediate close
 	 * seems legitimate.
 	 */
-	if (qcc_is_dead(qcc)) {
-		TRACE_STATE("releasing dead connection", QMUX_EV_QCC_WAKE, qcc->conn);
-		qcc_app_shutdown(qcc);
-		qcc_release(qcc);
-	}
+	TRACE_STATE("releasing dead connection", QMUX_EV_QCC_WAKE, qcc->conn);
+	qcc_app_shutdown(qcc);
+	qcc_release(qcc);
 
  out:
 	TRACE_LEAVE(QMUX_EV_QCC_WAKE);
@@ -4615,14 +4607,8 @@ static int qmux_ctl(struct connection *conn, enum mux_ctl_type mux_ctl, void *ou
 	case MUX_CTL_GET_GLITCHES:
 		return qcc->glitches;
 
-	case MUX_CTL_GET_NBSTRM: {
-		struct qcs *qcs;
-		unsigned int nb_strm = qcc->nb_sc;
-
-		list_for_each_entry(qcs, &qcc->opening_list, el_opening)
-			nb_strm++;
-		return nb_strm;
-	}
+	case MUX_CTL_GET_NBSTRM:
+		return qcc->nb_hreq;
 
 	case MUX_CTL_GET_MAXSTRM:
 		return qcc->lfctl.ms_bidi_init;

@@ -98,9 +98,10 @@ static inline char *qcs_st_to_str(enum qcs_state st)
 
 int qcc_install_app_ops(struct qcc *qcc);
 
-/* Register <qcs> stream for http-request timeout. If the stream is not yet
- * attached in the configured delay, qcc timeout task will be triggered. This
- * means the full header section was not received in time.
+/* Flags <qcs> as a request stream. The connection will be considered as active
+ * until all request streams are closed or on inactivity timeout. On the
+ * frontend side, http-request timeout will be applied on the stream to ensure
+ * headers are received in time.
  *
  * This function should be called by the application protocol layer on request
  * streams initialization.
@@ -109,14 +110,24 @@ static inline void qcs_wait_http_req(struct qcs *qcs)
 {
 	struct qcc *qcc = qcs->qcc;
 
-	/* A stream cannot be registered several times. */
-	BUG_ON_HOT(tick_isset(qcs->start));
-	qcs->start = now_ms;
-
-	/* qcc.opening_list size is limited by flow-control so no custom
-	 * restriction is needed here.
+	/* For frontend connections, register the stream in QCC opening_list.
+	 * This is necessary for http-request timeout.
 	 */
-	LIST_APPEND(&qcc->opening_list, &qcs->el_opening);
+	if (!conn_is_back(qcc->conn)) {
+		/* A stream cannot be registered several times. */
+		BUG_ON_HOT(tick_isset(qcs->start));
+		qcs->start = now_ms;
+
+		/* qcc.opening_list size is limited by flow-control so no
+		 * custom restriction is needed here.
+		 */
+		LIST_APPEND(&qcc->opening_list, &qcs->el_opening);
+	}
+
+	/* Ensure flag is only set once per stream to avoid nb_hreq counter wrapping. */
+	BUG_ON_HOT(qcs->flags & QC_SF_HREQ_RECV);
+	qcs->flags |= QC_SF_HREQ_RECV;
+	++qcc->nb_hreq;
 }
 
 void qcc_show_quic(struct qcc *qcc);
