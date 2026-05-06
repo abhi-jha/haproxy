@@ -6906,6 +6906,9 @@ ssize_t read_line_to_trash(const char *path_fmt, ...)
 			trash.data--;
 		trash.area[trash.data] = 0;
 		ret = trash.data; // success
+	} else if (feof(file)) {
+		/* empty file is allowed */
+		ret = 0;
 	}
 
 	fclose(file);
