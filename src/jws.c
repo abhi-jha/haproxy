@@ -219,6 +219,7 @@ size_t EVP_PKEY_to_pub_jwk(EVP_PKEY *pkey, char *dst, size_t dsize)
 /*
  * Generate the JWS payload and converts it to base64url.
  * Use either <kid> or <jwk>, but won't use both
+ * <nonce> is optional.
  *
  * Return the size of the data or 0
  */
@@ -226,13 +227,14 @@ size_t EVP_PKEY_to_pub_jwk(EVP_PKEY *pkey, char *dst, size_t dsize)
 size_t jws_b64_protected(enum jwt_alg alg, char *kid, char *jwk, char *nonce, char *url,
                          char *dst, size_t dsize)
 {
-	char *acc;
-	char *acctype;
 	int ret = 0;
 	struct buffer *json = NULL;
 	const char *algstr;
 
 	switch (alg) {
+		case JWS_ALG_HS256: algstr = "HS256"; break;
+		case JWS_ALG_HS384: algstr = "HS384"; break;
+		case JWS_ALG_HS512: algstr = "HS512"; break;
 		case JWS_ALG_RS256: algstr = "RS256"; break;
 		case JWS_ALG_RS384: algstr = "RS384"; break;
 		case JWS_ALG_RS512: algstr = "RS512"; break;
@@ -246,24 +248,16 @@ size_t jws_b64_protected(enum jwt_alg alg, char *kid, char *jwk, char *nonce, ch
 	if ((json = alloc_trash_chunk()) == NULL)
 		goto out;
 
-	/* kid or jwk ? */
-	acc = kid ? kid : jwk;
-	acctype = kid ? "kid" : "jwk";
-
-	ret = snprintf(json->area, json->size, "{\n"
-			"    \"alg\": \"%s\",\n"
-			"    \"%s\":  %s%s%s,\n"
-			"    \"nonce\":   \"%s\",\n"
-			"    \"url\":   \"%s\"\n"
-			"}\n",
-			algstr, acctype, kid ? "\"" : "", acc, kid ? "\"" : "", nonce, url);
-	if (ret >= json->size) {
-		ret = 0;
-		goto out;
-	}
-
-
-	json->data = ret;
+	chunk_appendf(json, "{");
+	if (kid)
+		chunk_appendf(json, "\"kid\": \"%s\",", kid);
+	else
+		chunk_appendf(json, "\"jwk\": %s,", jwk);
+	if (nonce)
+		chunk_appendf(json, "\"nonce\": \"%s\",", nonce);
+	chunk_appendf(json, "\"alg\": \"%s\",", algstr);
+	chunk_appendf(json, "\"url\": \"%s\"", url);
+	chunk_appendf(json, "}");
 
 	ret = a2base64url(json->area, json->data, dst, dsize);
 out:
