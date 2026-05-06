@@ -4179,13 +4179,15 @@ static int h1_process(struct h1c * h1c)
 		if (h1c->flags & H1C_F_IS_BACK)
 			goto release;
 
-		/* First of all handle H1 to H2 upgrade (no need to create the H1 stream) */
-		if (h1c->state != H1_CS_DRAINING &&                /* Not draining message */
-		    !(h1c->flags & H1C_F_WAIT_NEXT_REQ) &&         /* First request */
-		    !(h1c->px->options2 & PR_O2_NO_H2_UPGRADE) &&  /* H2 upgrade supported by the proxy */
-		    !(conn->mux->flags & MX_FL_NO_UPG)) {          /* the current mux supports upgrades */
-			/* Try to match H2 preface before parsing the request headers. */
-			if (b_isteq(&h1c->ibuf, 0, b_data(&h1c->ibuf), ist(H2_CONN_PREFACE)) > 0) {
+		/* First of all handle H2 preface (except for DRAINING mode).
+		 * If H1 to H2 upgrade is allowed, no need to create the H1
+		 * stream. If not allowed, a 405 must be returned.
+		 */
+		if (h1c->state != H1_CS_DRAINING &&
+		    b_isteq(&h1c->ibuf, 0, b_data(&h1c->ibuf), ist(H2_CONN_PREFACE)) > 0) {
+			if (!(h1c->flags & H1C_F_WAIT_NEXT_REQ) &&         /* First request */
+			    !(h1c->px->options2 & PR_O2_NO_H2_UPGRADE) &&  /* H2 upgrade supported by the proxy */
+			    !(conn->mux->flags & MX_FL_NO_UPG)) {          /* the current mux supports upgrades */
 				h1c->flags |= H1C_F_UPG_H2C;
 				if (h1c->state == H1_CS_UPGRADING) {
 					BUG_ON(!h1s);
@@ -4193,6 +4195,19 @@ static int h1_process(struct h1c * h1c)
 				}
 				TRACE_STATE("release h1c to perform H2 upgrade ", H1_EV_RX_DATA|H1_EV_H1C_WAKE);
 				goto release;
+			}
+			else {
+				if (h1c->state == H1_CS_UPGRADING) {
+					/* In case of TCP > H1 > H2 upgrade, h1s exist, so report an error to the SD */
+					BUG_ON(!h1s);
+					h1s->flags |= H1S_F_PARSING_ERROR;
+					se_fl_set(h1s->sd, SE_FL_ERROR); /* Set EOS here to release the SC */
+				}
+				h1c->errcode = 405;
+				TRACE_ERROR("H2 update not allowed", H1_EV_H1C_WAKE|H1_EV_H1C_ERR);
+				h1_report_glitch(h1c, 1, "H2 update not allowed");
+				h1_handle_parsing_error(h1c);
+				goto no_parsing;
 			}
 		}
 

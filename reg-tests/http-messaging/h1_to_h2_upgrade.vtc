@@ -1,0 +1,73 @@
+varnishtest "Tests of H1->H2 upgrades"
+
+feature ignore_unknown_macro
+
+server s1 {
+	rxreq
+	txresp \
+	  -status 200 \
+} -start
+
+haproxy h1 -conf {
+    global
+    .if feature(THREAD)
+        thread-groups 1
+    .endif
+
+        # WT: limit false-positives causing "HTTP header incomplete" due to
+        # idle server connections being randomly used and randomly expiring
+        # under us.
+        tune.idle-pool.shared off
+
+    defaults
+	#log stdout format raw daemon
+	mode http
+	option http-buffer-request
+	timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout client  "${HAPROXY_TEST_TIMEOUT-5s}"
+	timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
+
+    listen feh1
+	bind "fd@${feh1}"
+	bind "fd@${feh2}" proto h1
+	server s1 ${s1_addr}:${s1_port}
+} -start
+
+client c1 -connect ${h1_feh1_sock} {
+	txpri
+	stream 0 {
+		txsettings
+		rxsettings
+		txsettings -ack
+		rxsettings
+		expect settings.ack == true
+	} -run
+
+	# first request is valid
+	stream 1 {
+		txreq \
+		  -req "GET" \
+		  -scheme "https" \
+		  -url "/"
+		rxresp
+		expect resp.status == 200
+	} -run
+
+	# Second request. hide something similar to a H2 preface (PRI method). it is invalid
+	stream 3 {
+		txreq \
+		  -req "PRI" \
+		  -scheme "https" \
+		  -url "*" \
+		  -body "SM\r\n\r\n"
+		rxresp
+		expect resp.status == 400
+	} -run
+
+} -run
+
+client c2 -connect ${h1_feh2_sock} {
+        send "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+        rxresp
+        expect resp.status == 405
+} -run
