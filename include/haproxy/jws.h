@@ -11,6 +11,7 @@ size_t EVP_PKEY_to_pub_jwk(EVP_PKEY *pkey, char *dst, size_t dsize);
 enum jwt_alg EVP_PKEY_to_jws_alg(EVP_PKEY *pkey);
 size_t jws_b64_payload(char *payload, char *dst, size_t dsize);
 size_t jws_b64_protected(enum jwt_alg alg, char *kid, char *jwk, char *nonce, char *url, char *dst, size_t dsize);
+size_t jws_b64_hmac_signature(char *key, size_t key_len, enum jwt_alg alg, char *b64protected, char *b64payload, char *dst, size_t dsize);
 size_t jws_b64_signature(EVP_PKEY *pkey, enum jwt_alg alg, char *b64protected, char *b64payload, char *dst, size_t dsize);
 size_t jws_flattened(char *protected, char *payload, char *signature, char *dst, size_t dsize);
 size_t jws_thumbprint(EVP_PKEY *pkey, char *dst, size_t dsize);

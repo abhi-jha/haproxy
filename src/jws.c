@@ -452,6 +452,52 @@ out:
 	return 0;
 }
 
+
+/*
+ * Generate a JWS HMAC signature using the base64url protected buffer and the base64url payload buffer
+ *
+ * Return the size of the data or 0
+ */
+size_t jws_b64_hmac_signature(char *key, size_t key_len, enum jwt_alg alg, char *b64protected, char *b64payload, char *dst, size_t dsize)
+{
+	const EVP_MD *evp_alg = NULL;
+	int ret = 0;
+	unsigned char mac[EVP_MAX_MD_SIZE] = {};
+	unsigned int mac_len = 0;
+	struct buffer *sig_data = NULL;
+
+	if ((sig_data = alloc_trash_chunk()) == NULL)
+		goto out;
+
+	switch (alg) {
+		case JWS_ALG_HS256: evp_alg = EVP_sha256(); break;
+		case JWS_ALG_HS384: evp_alg = EVP_sha384(); break;
+		case JWS_ALG_HS512: evp_alg = EVP_sha512(); break;
+		default:
+			goto out;
+	}
+
+	if (!chunk_memcat(sig_data, b64protected, strlen(b64protected)) ||
+	    !chunk_memcat(sig_data, ".", 1) ||
+	    !chunk_memcat(sig_data, b64payload, strlen(b64payload)))
+		goto out;
+
+	if (HMAC(evp_alg, key, (int)key_len,
+	         (unsigned char*)sig_data->area, sig_data->data,
+	         mac, &mac_len) == NULL)
+		goto out;
+
+	ret = a2base64url((const char *)mac, mac_len, dst, dsize);
+
+out:
+	free_trash_chunk(sig_data);
+
+	if (ret > 0)
+		return ret;
+	return 0;
+}
+
+
 /*
  * Fill a <dst> buffer of <dsize> size with a jwk thumbprint from a pkey
  *
