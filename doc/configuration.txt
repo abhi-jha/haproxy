@@ -32660,6 +32660,33 @@ Example:
       curves P-384
       map virt@acme
 
+eab-key-id <filename>
+  Configure the path to the EAB key id file. The credential is provided by
+  the CA and must be placed at the specified path before starting HAProxy.
+  It is used during account creation only.
+
+  The file must contain a plain ASCII string.
+
+  EAB credentials are only required during the initial ACME account creation
+  and can be removed afterwards, either from the config or by emptying the
+  files. An empty file is silently ignored. Whitespace is not ignored, except
+  for the trailing newline.
+
+  See also: "eab-mac-key", "eab-mac-alg"
+
+eab-mac-key <filename>
+  Configure the path to the EAB MAC key file. The credential is provided by
+  the CA and must be placed at the specified path before starting HAProxy.
+  It is used during account creation only.
+
+  The file must contain a base64url encoded MAC key.
+
+  EAB credentials are only required during the initial ACME account creation
+  and can be removed afterwards, either from the config or by emptying the
+  files. An empty file is silently ignored. Whitespace is not ignored, except
+  for the trailing newline.
+
+  See also: "eab-key-id", "eab-mac-alg"
 
 12.9. Healthchecks
 ------------------
