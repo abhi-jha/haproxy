@@ -5,6 +5,7 @@
 #include <haproxy/acme_resolvers-t.h>
 #include <haproxy/istbuf.h>
 #include <haproxy/buf-t.h>
+#include <haproxy/jwt-t.h>
 #include <haproxy/openssl-compat.h>
 
 #if defined(HAVE_ACME)
@@ -46,6 +47,7 @@ struct acme_cfg {
 		char *mac_key_file;    /* base64url encoded EAB hmac key filename */
 		char *kid;             /* EAB key id */
 		struct buffer mac_key; /* raw EAB hmac key */
+		enum jwt_alg mac_alg;  /* MAC algorithm for EAB signature */
 	} eab;
 	char *challenge;            /* HTTP-01, DNS-01, etc */
 	char *profile;              /* ACME profile */

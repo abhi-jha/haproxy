@@ -32688,6 +32688,13 @@ eab-mac-key <filename>
 
   See also: "eab-key-id", "eab-mac-alg"
 
+eab-mac-alg { HS256 | HS384 | HS512 }
+  Configure MAC algorithm used for EAB signing. Default is HS256. EAB MAC key
+  must be large enough to support specified MAC algorithm. Not all CAs support
+  algorithms other than HS256.
+
+  See also: "eab-key-id", "eab-mac-key"
+
 12.9. Healthchecks
 ------------------
 

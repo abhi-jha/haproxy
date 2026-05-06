@@ -214,6 +214,9 @@ struct acme_cfg *new_acme_cfg(const char *name)
 	/* default to 2048 bits when using RSA */
 	ret->key.bits = 2048;
 
+	/* HS256 is the only sane choice for HMAC */
+	ret->eab.mac_alg = JWS_ALG_HS256;
+
 	ret->next = acme_cfgs;
 	acme_cfgs = ret;
 
@@ -448,6 +451,26 @@ static int cfg_parse_acme_kws(char **args, int section_type, struct proxy *curpx
 		if (!cur_acme->eab.mac_key_file) {
 			err_code |= ERR_ALERT | ERR_FATAL;
 			ha_alert("parsing [%s:%d]: out of memory.\n", file, linenum);
+			goto out;
+		}
+	} else if (strcmp(args[0], "eab-mac-alg") == 0) {
+		if (!*args[1]) {
+			ha_alert("parsing [%s:%d]: keyword '%s' in '%s' section requires an argument\n", file, linenum, args[0], cursection);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		if (alertif_too_many_args(1, file, linenum, args, &err_code))
+			goto out;
+
+		if (strcmp(args[1], "HS256") == 0) {
+			cur_acme->eab.mac_alg = JWS_ALG_HS256;
+		} else if (strcmp(args[1], "HS384") == 0) {
+			cur_acme->eab.mac_alg = JWS_ALG_HS384;
+		} else if (strcmp(args[1], "HS512") == 0) {
+			cur_acme->eab.mac_alg = JWS_ALG_HS512;
+		} else {
+			ha_alert("parsing [%s:%d]: keyword '%s' in '%s' must be one of the following: HS256, HS384, HS512\n", file, linenum, args[0], cursection);
+			err_code |= ERR_ALERT | ERR_FATAL;
 			goto out;
 		}
 	} else if (strcmp(args[0], "challenge") == 0) {
@@ -882,6 +905,7 @@ static int cfg_postsection_acme()
 		if (rv >= 1) {
 			struct buffer *dec_mac = get_trash_chunk();
 			int bytes = 0;
+			int alg_bytes = 0;
 
 			bytes = base64urldec(trash.area, trash.data, dec_mac->area, dec_mac->size);
 			if (bytes < 0) {
@@ -891,9 +915,19 @@ static int cfg_postsection_acme()
 			}
 			dec_mac->data = bytes;
 
-			if (bytes < 32) {
-				ha_alert("acme: section '%s': EAB MAC key from '%s' is only %d bytes long, but at least 32 bytes is required for the specified MAC type.\n",
-				     cur_acme->name, cur_acme->eab.kid_file, bytes);
+			switch (cur_acme->eab.mac_alg) {
+				case JWS_ALG_HS256: alg_bytes = 32; break;
+				case JWS_ALG_HS384: alg_bytes = 48; break;
+				case JWS_ALG_HS512: alg_bytes = 64; break;
+				default:
+					ha_alert("acme: invalid mac alg.\n");
+					err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+					goto out;
+			}
+
+			if (bytes < alg_bytes) {
+				ha_alert("acme: section '%s': EAB mac key from '%s' is only %d bytes long, but at least %d bytes is required for the specified mac type.\n",
+				     cur_acme->name, cur_acme->eab.mac_key_file, bytes, alg_bytes);
 				err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
 				goto out;
 			}
@@ -1117,6 +1151,7 @@ static struct cfg_kw_list cfg_kws_acme = {ILH, {
 	{ CFG_ACME, "dns-timeout",  cfg_parse_acme_kws },
 	{ CFG_ACME, "eab-key-id",  cfg_parse_acme_kws },
 	{ CFG_ACME, "eab-mac-key",  cfg_parse_acme_kws },
+	{ CFG_ACME, "eab-mac-alg",  cfg_parse_acme_kws },
 	{ CFG_ACME, "acme-vars",  cfg_parse_acme_vars_provider },
 	{ CFG_ACME, "provider-name",  cfg_parse_acme_vars_provider },
 	{ CFG_GLOBAL, "acme.scheduler", cfg_parse_global_acme_sched },
@@ -1376,13 +1411,12 @@ error:
 	return ret;
 }
 
-int acme_jws_eab_payload(struct ist url, EVP_PKEY *acc_key, struct buffer mac_key, char *kid, struct buffer *output, char **errmsg)
+int acme_jws_eab_payload(struct ist url, EVP_PKEY *acc_key, struct buffer mac_key, enum jwt_alg alg, char *kid, struct buffer *output, char **errmsg)
 {
 	struct buffer *b64payload = NULL;
 	struct buffer *b64prot = NULL;
 	struct buffer *b64sign = NULL;
 	struct buffer *jwk = NULL;
-	enum jwt_alg alg = JWS_ALG_HS256;
 	int ret = 1;
 
 	b64payload = alloc_trash_chunk();
@@ -2375,7 +2409,7 @@ int acme_req_account(struct task *task, struct acme_ctx *ctx, int newaccount, ch
 	if (newaccount) {
 		chunk_appendf(req_in, "{");
 		if (ctx->cfg->eab.mac_key.data > 0 && ctx->cfg->eab.kid != NULL) {
-			if (acme_jws_eab_payload(ctx->resources.newAccount, ctx->cfg->account.pkey, ctx->cfg->eab.mac_key, ctx->cfg->eab.kid, eab_req_out, errmsg) != 0)
+			if (acme_jws_eab_payload(ctx->resources.newAccount, ctx->cfg->account.pkey, ctx->cfg->eab.mac_key, ctx->cfg->eab.mac_alg, ctx->cfg->eab.kid, eab_req_out, errmsg) != 0)
 				goto out;
 			chunk_appendf(req_in, "\"externalAccountBinding\": %.*s,", (int)eab_req_out->data, eab_req_out->area);
 		}
