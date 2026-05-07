@@ -3287,9 +3287,11 @@ static int qmux_avail_streams(struct connection *conn)
 		ret = MIN(ret, max_reuse);
 	}
 
-	/* Ensure we do not exceed the maximum usable stream ID. */
-	if (unlikely(ret > QCS_ID_MAX_STRM_CL_BIDI - qcc->next_bidi_l))
-		ret = QCS_ID_MAX_STRM_CL_BIDI - qcc->next_bidi_l;
+	/* Do not exceed maximum usable stream ID. To simplify the calcul,
+	 * limit is only applied when one or zero stream remains.
+	 */
+	if (ret && unlikely(qcc->next_bidi_l >= QCS_ID_MAX_STRM_CL_BIDI))
+		ret = qcc->next_bidi_l == QCS_ID_MAX_STRM_CL_BIDI ? 1 : 0;
 
 	return ret;
 }
