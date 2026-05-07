@@ -39,6 +39,8 @@ haproxy h1 -conf {
         crt-base "${testdir}"
         key-base "${testdir}"
 
+        jwt.decrypt_alg_list ALL
+
     defaults
         mode http
         timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"

@@ -21930,8 +21930,11 @@ jwt_decrypt_cert(<cert>)
   format (five dot-separated base64-url encoded strings).
 
   This converter can be used for tokens that have an algorithm ("alg" field of
-  the JOSE header) among the following: RSA1_5, RSA-OAEP, RSA-OAEP-256,
-  ECDH-ES, ECDH-ES+A128KW, ECDH-ES+A192KW or ECDH-ES+A256KW.
+  the JOSE header) among the following: RSA-OAEP, RSA-OAEP-256, ECDH-ES,
+  ECDH-ES+A128KW, ECDH-ES+A192KW or ECDH-ES+A256KW.
+  The RSA1_5 algorithm is implemented but disabled by default following what is
+  suggested in section 3.2 of RFC 8725. It can be reenabled if needed thanks to
+  'jwt.decrypt_alg_list' global option.
 
   The supported algorithms and encryption algorithms ("alg" and "enc" fields of
   the JOSE header respectively) can be modified thanks to the
@@ -21964,9 +21967,12 @@ jwt_decrypt_jwk(<jwk>)
   the provided JWK to be of the 'oct' type.
 
   This converter also manages tokens that have an algorithm ("alg" field of the
-  JOSE header) in the RSA family (RSA1_5, RSA-OAEP or RSA-OAEP-256) when
-  provided an 'RSA' JWK, or in the ECDH family (ECDH-ES, ECDH-ES+A128KW,
-  ECDH-ES+A192KW or ECDH-ES+A256KW) when provided an 'EC' JWK.
+  JOSE header) in the RSA family (RSA-OAEP or RSA-OAEP-256) when provided an
+  'RSA' JWK, or in the ECDH family (ECDH-ES, ECDH-ES+A128KW, ECDH-ES+A192KW or
+  ECDH-ES+A256KW) when provided an 'EC' JWK.
+  The RSA1_5 algorithm is implemented but disabled by default following what is
+  suggested in section 3.2 of RFC 8725. It can be reenabled if needed thanks to
+  'jwt.decrypt_alg_list' global option.
 
   Please note that the A128KW and A192KW algorithms are not available on AWS-LC
   so the A128KW, A192KW, ECDH-ES+A128KW and ECDH-ES+A192KW algorithms won't

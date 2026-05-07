@@ -57,7 +57,9 @@ enum {
 };
 
 struct alg_enc jwe_algs_dflt[] = {
-	{ "RSA1_5",		JWE_ALG_RSA1_5,		ALG_ENC_ENABLED },
+	/* The weak RSA1.5 algorithm gets disabled by default as suggested in
+	 * section 3.2 of RFC 8725 */
+	{ "RSA1_5",		JWE_ALG_RSA1_5,		ALG_ENC_DISABLED },
 	{ "RSA-OAEP",		JWE_ALG_RSA_OAEP,	ALG_ENC_ENABLED },
 	{ "RSA-OAEP-256",	JWE_ALG_RSA_OAEP_256,	ALG_ENC_ENABLED },
 	{ "A128KW",		JWE_ALG_A128KW,		ALG_ENC_ENABLED },
