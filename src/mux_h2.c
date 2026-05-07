@@ -6521,8 +6521,22 @@ try_again:
 
  end_transfer:
 	/* here we're done with the frame, all the payload (except padding) was
-	 * transferred.
+	 * transferred. So let's consume the padding now.
+	 *
+	 * The padding may not have been fully received, so we must take care to
+	 * not consume more than avaiable and eventually retry later.
 	 */
+	BUG_ON(h2c->dfl != h2c->dpl);
+	flen = b_data(&h2c->dbuf);
+	if (flen >  h2c->dfl)
+		flen = h2c->dfl;
+	b_del(&h2c->dbuf, flen);
+	h2c->dfl -= flen;
+	h2c->dpl -= flen;
+	h2c->rcvd_c += flen;
+	h2c->rcvd_s += flen;
+	if (h2c->dfl)
+		goto fail;
 
 	if (!(h2s->flags & H2_SF_BODY_TUNNEL) && (h2c->dff & H2_F_DATA_END_STREAM)) {
 		/* no more data are expected for this message. This add the EOM
@@ -6537,9 +6551,6 @@ try_again:
 		}
 	}
 
-	h2c->rcvd_c += h2c->dpl;
-	h2c->rcvd_s += h2c->dpl;
-	h2c->dpl = 0;
 	h2c->st0 = H2_CS_FRAME_A; // send the corresponding window update
 	htx_to_buf(htx, scbuf);
 	TRACE_LEAVE(H2_EV_RX_FRAME|H2_EV_RX_DATA, h2c->conn, h2s);
