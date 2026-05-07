@@ -2175,11 +2175,11 @@ static int jwe_parse_global_alg_enc_list(char **args, int section_type, struct p
 	if (dup_alg_enc_arrays())
 		goto end;
 
-	if (args[0][14] == 'a') {
-		/* "jwe.supported_algorithms" */
+	if (args[0][12] == 'a') {
+		/* "jwt.decrypt_alg_list" */
 		arr = jwe_algs;
 	} else {
-		/* "jwe.supported_encodings" */
+		/* "jwt.decrypt_enc_list" */
 		arr = jwe_encodings;
 	}
 
