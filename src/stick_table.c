@@ -5702,6 +5702,10 @@ static int cli_parse_table_req(char **args, char *payload, struct appctx *appctx
 		return 0;
 	}
 
+	/* only "show" is permitted to level user, others (clear/set) require "oper" */
+	if (ctx->action != STK_CLI_ACT_SHOW && !cli_has_level(appctx, ACCESS_LVL_OPER))
+		return 1;
+
 	if (strcmp(args[3], "key") == 0)
 		return table_process_entry_per_key(appctx, args);
 	if (strcmp(args[3], "ptr") == 0)
