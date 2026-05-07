@@ -3907,9 +3907,8 @@ int mworker_cli_create_master_proxy(char **errmsg)
 	mworker_proxy->mode = PR_MODE_CLI;
 	/* default to 10 concurrent connections */
 	mworker_proxy->maxconn = 10;
-	mworker_proxy->timeout.client = 0; /* no timeout */
-	mworker_proxy->timeout.serverfin = MS_TO_TICKS(1000); /* 1s timeout in case worker is not responding on shutdown */
-
+	/* no timeout */
+	mworker_proxy->timeout.client = 0;
 	mworker_proxy->conf.file = strdup("MASTER");
 	mworker_proxy->conf.line = 0;
 	mworker_proxy->accept = frontend_accept;
