@@ -32471,7 +32471,6 @@ Current limitations:
   from outside HAProxy using "dump ssl cert" on the stats socket. It's possible
   to automate the dump of the certificates by using the dataplaneAPI or the
   haproxy-dump-certs script provided in the admin/cli/ directory.
-- External Account Binding (EAB) is not supported.
 
 The ACME scheduler starts at HAProxy startup, it will loop over the
 certificates and start an ACME renewal task when the notAfter task is past
