@@ -866,7 +866,7 @@ ifneq ($(USE_OT:0=),)
 endif
 
 ifneq ($(EXTRA_MAKE),)
-  include $(addsuffix /Makefile.inc,$(EXTRA_MAKE))
+  include $(addsuffix /Makefile.mk,$(EXTRA_MAKE))
 endif
 
 # better keep this one close to the end, as several libs above may need it
