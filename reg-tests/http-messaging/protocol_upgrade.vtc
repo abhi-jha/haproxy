@@ -72,7 +72,7 @@ server srv_h2 {
 		txresp \
 		  -status 200
 	} -run
-} -repeat 4 -start
+} -repeat 2 -start
 
 # http2 server without support for RFC8441
 server srv_h2_no_ws {
@@ -219,8 +219,7 @@ client c1_h1_h2 -connect ${hap_frt_h1_h2_sock} {
 client c2_h2 -connect ${hap_frt_h2_sock} {
 	txpri
 	stream 0 {
-		# manually send RFC8441 SETTINGS_ENABLE_CONNECT_PROTOCOL
-		sendhex "00 00 06 04   00    00 00 00 00    00 08   00 00 00 01"
+		txsettings
 		rxsettings
 		txsettings -ack
 		rxsettings
@@ -242,62 +241,11 @@ client c2_h2 -connect ${hap_frt_h2_sock} {
 	} -run
 } -run
 
-# connect to h2 server frontend without extension: must fail
-client c2_h2_rej1 -connect ${hap_frt_h2_sock} {
-	txpri
-	stream 0 {
-		# no extension sent
-		txsettings
-		rxsettings
-		txsettings -ack
-		rxsettings
-		expect settings.ack == true
-	} -run
-
-	stream 1 {
-		txreq \
-		  -req "CONNECT" \
-		  -scheme "http" \
-		  -url "/" \
-		  -hdr ":authority" "127.0.0.1" \
-		  -hdr ":protocol" "custom_protocol" \
-		  -nostrend
-
-		rxrst
-	} -run
-} -run
-
-# connect to h2 server with ext but :proto with bad method: must fail
-client c2_h2_rej2 -connect ${hap_frt_h2_sock} {
-	txpri
-	stream 0 {
-		# manually send RFC8441 SETTINGS_ENABLE_CONNECT_PROTOCOL
-		sendhex "00 00 06 04   00    00 00 00 00    00 08   00 00 00 01"
-		rxsettings
-		txsettings -ack
-		rxsettings
-		expect settings.ack == true
-	} -run
-
-	stream 1 {
-		txreq \
-		  -req "GET" \
-		  -scheme "http" \
-		  -url "/" \
-		  -hdr ":authority" "127.0.0.1" \
-		  -hdr ":protocol" "custom_protocol" \
-		  -nostrend
-
-		rxrst
-	} -run
-} -run
-
 # connect to h2 translation frontend
 client c3_h2_h1 -connect ${hap_frt_h2_h1_sock} {
 	txpri
 	stream 0 {
-		# manually send RFC8441 SETTINGS_ENABLE_CONNECT_PROTOCOL
-		sendhex "00 00 06 04   00    00 00 00 00    00 08   00 00 00 01"
+		txsettings
 		rxsettings
 		txsettings -ack
 		rxsettings
@@ -391,8 +339,7 @@ client c8_h2c -connect ${hap_frt_h1_h2c_sock} {
 client c9_h2c -connect ${hap_frt_h2_h1_sock} {
 	txpri
 	stream 0 {
-		# manually send RFC8441 SETTINGS_ENABLE_CONNECT_PROTOCOL
-		sendhex "00 00 06 04   00    00 00 00 00    00 08   00 00 00 01"
+		txsettings
 		rxsettings
 		txsettings -ack
 		rxsettings

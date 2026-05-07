@@ -6286,8 +6286,16 @@ next_frame:
 	/* If an Extended CONNECT has been sent on this stream, set message flag
 	 * to convert 200 response to 101 htx response. We only support this if
 	 * the connection supports RFC8441.
+	 * On the backend, that means the origin server advertised the setting.
+	 * On the frontend, RFC 8441 §3 only requires the server (us) to
+	 * advertise it; clients are not required to echo it back. Use whether
+	 * we ourselves advertised it as the gate.
 	 */
-	msgf |= (h2c->flags & H2_CF_RCVD_RFC8441) ? H2_MSGF_EXT_CONN_OK : 0;
+	if (h2c->flags & H2_CF_IS_BACK)
+		msgf |= (h2c->flags & H2_CF_RCVD_RFC8441) ? H2_MSGF_EXT_CONN_OK : 0;
+	else if (!(global.tune.options & GTUNE_DISABLE_H2_WEBSOCKET))
+		msgf |= H2_MSGF_EXT_CONN_OK;
+
 	msgf |= (*flags & H2_SF_EXT_CONNECT_SENT) ? H2_MSGF_EXT_CONNECT: 0;
 
 	/* when dealing with trailers, we need to check the content-length */
