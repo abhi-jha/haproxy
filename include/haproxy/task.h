@@ -736,7 +736,6 @@ static inline void _task_schedule(struct task *task, int when, const struct ha_c
 			when = tick_first(when, task->expire);
 
 		task->expire = when;
-		task_drop_running(task, 0);
 		if (!task_in_wq(task) || tick_is_lt(task->expire, task->wq.key)) {
 			if (likely(caller)) {
 				caller = HA_ATOMIC_XCHG(&task->caller, caller);
@@ -747,6 +746,7 @@ static inline void _task_schedule(struct task *task, int when, const struct ha_c
 			}
 			__task_queue(task, &tg_ctx->timers);
 		}
+		task_drop_running(task, 0);
 		HA_RWLOCK_WRUNLOCK(TASK_WQ_LOCK, &wq_lock);
 	} else
 #endif
