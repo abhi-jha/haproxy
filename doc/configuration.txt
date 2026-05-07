@@ -1791,6 +1791,8 @@ The following keywords are supported in the "global" section :
    - insecure-fork-wanted
    - insecure-setuid-wanted
    - issuers-chain-path
+   - jwt.decrypt_alg_list
+   - jwt.decrypt_enc_list
    - key-base
    - limited-quic
    - localpeer
@@ -2887,6 +2889,40 @@ issuers-chain-path <dir>
 
   The OCSP features are able to use the completed chain when no .issuer was
   used, or no chain was provided in the PEM.
+
+jwt.decrypt_alg_list <list>
+  Set the list of algorithms allowed in the jwt_decrypt_XXX converters. JWT
+  tokens using an unsupported or disabled algorithms will never be decrypted.
+  The specified algorithms must have the same format as in section 4.1 of
+  RFC7518 and must be colon-separated. The special "ALL" name can be used to
+  enable all the supported algorithms (see "jwt_decrypt_jwk" converter for a
+  complete list) and a '!' can be appended to an algorithm name to explicitly
+  disable it.
+  Please note that unless "ALL" is specified, using this option will disable
+  any algorithm that is not explicitly mentioned in the provided list.
+
+  Examples:
+    # Enable all algorithms but the "ECDH-ES" one
+    jwt.decrypt_alg_list ALL:!ECDH-ES
+
+    # Only enable ECDH-ES algorithms
+    jwt.decrypt_alg_list ECDH-ES:ECDH-ES+A128KW:ECDH-ES+A192KW:ECDH-ES+A256KW
+
+jwt.decrypt_enc_list <list>
+  Set the list of encryption algorithms allowed in the jwt_decrypt_XXX
+  converters. JWT tokens using an unsupported or disabled encryption algorithms
+  will never be decrypted.
+  The specified algorithms must have the same format as in section 5.1 of
+  RFC7518 and must be colon-separated. The special "ALL" name can be used to
+  enable all the supported algorithms (see "jwt_decrypt_jwk" converter for a
+  complete list) and a '!' can be appended to an algorithm name to explicitly
+  disable it.
+  Please note that unless "ALL" is specified, using this option will disable
+  any algorithm that is not explicitly mentioned in the provided list.
+
+  Examples:
+    # Enable only AES GCM encrypting algorithms
+    jwt.decrypt_enc_list A128GCM:A192GCM:A256GCM
 
 key-base <dir>
   Assigns a default directory to fetch SSL private keys from when a relative
@@ -21897,6 +21933,10 @@ jwt_decrypt_cert(<cert>)
   the JOSE header) among the following: RSA1_5, RSA-OAEP, RSA-OAEP-256,
   ECDH-ES, ECDH-ES+A128KW, ECDH-ES+A192KW or ECDH-ES+A256KW.
 
+  The supported algorithms and encryption algorithms ("alg" and "enc" fields of
+  the JOSE header respectively) can be modified thanks to the
+  'jwt.decrypt_alg_list' and 'jwt.decrypt_enc_list' global options.
+
   The JWE token must be provided base64url-encoded and the output will be
   provided "raw". If an error happens during token parsing, signature
   verification or content decryption, an empty string will be returned.
@@ -21931,6 +21971,10 @@ jwt_decrypt_jwk(<jwk>)
   Please note that the A128KW and A192KW algorithms are not available on AWS-LC
   so the A128KW, A192KW, ECDH-ES+A128KW and ECDH-ES+A192KW algorithms won't
   work.
+
+  The supported algorithms and encryption algorithms ("alg" and "enc" fields of
+  the JOSE header respectively) can be modified thanks to the
+  'jwt.decrypt_alg_list' and 'jwt.decrypt_enc_list' global options.
 
   The JWE token must be provided base64url-encoded and the output will be
   provided "raw". If an error happens during token parsing, signature

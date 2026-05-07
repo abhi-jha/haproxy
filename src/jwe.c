@@ -26,6 +26,7 @@
 struct alg_enc {
 	const char *name;
 	int value;
+	int enabled;
 };
 
 /* https://datatracker.ietf.org/doc/html/rfc7518#section-4.1 */
@@ -50,26 +51,33 @@ typedef enum {
 	// JWE_ALG_PBES2_HS512_A256KW,
 } jwe_alg;
 
-struct alg_enc jwe_algs[] = {
-	{ "RSA1_5", JWE_ALG_RSA1_5 },
-	{ "RSA-OAEP", JWE_ALG_RSA_OAEP },
-	{ "RSA-OAEP-256", JWE_ALG_RSA_OAEP_256 },
-	{ "A128KW", JWE_ALG_A128KW },
-	{ "A192KW", JWE_ALG_A192KW },
-	{ "A256KW", JWE_ALG_A256KW },
-	{ "dir", JWE_ALG_DIR },
-	{ "ECDH-ES", JWE_ALG_ECDH_ES },
-	{ "ECDH-ES+A128KW", JWE_ALG_ECDH_ES_A128KW },
-	{ "ECDH-ES+A192KW", JWE_ALG_ECDH_ES_A192KW },
-	{ "ECDH-ES+A256KW", JWE_ALG_ECDH_ES_A256KW },
-	{ "A128GCMKW", JWE_ALG_A128GCMKW },
-	{ "A192GCMKW", JWE_ALG_A192GCMKW },
-	{ "A256GCMKW", JWE_ALG_A256GCMKW },
-	{ "PBES2-HS256+A128KW", JWE_ALG_UNMANAGED },
-	{ "PBES2-HS384+A192KW", JWE_ALG_UNMANAGED },
-	{ "PBES2-HS512+A256KW", JWE_ALG_UNMANAGED },
-	{ NULL, JWE_ALG_UNMANAGED },
+enum {
+	ALG_ENC_DISABLED = 0,
+	ALG_ENC_ENABLED = 1
 };
+
+struct alg_enc jwe_algs_dflt[] = {
+	{ "RSA1_5",		JWE_ALG_RSA1_5,		ALG_ENC_ENABLED },
+	{ "RSA-OAEP",		JWE_ALG_RSA_OAEP,	ALG_ENC_ENABLED },
+	{ "RSA-OAEP-256",	JWE_ALG_RSA_OAEP_256,	ALG_ENC_ENABLED },
+	{ "A128KW",		JWE_ALG_A128KW,		ALG_ENC_ENABLED },
+	{ "A192KW",		JWE_ALG_A192KW,		ALG_ENC_ENABLED },
+	{ "A256KW",		JWE_ALG_A256KW,		ALG_ENC_ENABLED },
+	{ "dir",		JWE_ALG_DIR,		ALG_ENC_ENABLED },
+	{ "ECDH-ES",		JWE_ALG_ECDH_ES,	ALG_ENC_ENABLED },
+	{ "ECDH-ES+A128KW",	JWE_ALG_ECDH_ES_A128KW, ALG_ENC_ENABLED },
+	{ "ECDH-ES+A192KW",	JWE_ALG_ECDH_ES_A192KW, ALG_ENC_ENABLED },
+	{ "ECDH-ES+A256KW",	JWE_ALG_ECDH_ES_A256KW, ALG_ENC_ENABLED },
+	{ "A128GCMKW",		JWE_ALG_A128GCMKW,	ALG_ENC_ENABLED },
+	{ "A192GCMKW",		JWE_ALG_A192GCMKW,	ALG_ENC_ENABLED },
+	{ "A256GCMKW",		JWE_ALG_A256GCMKW,	ALG_ENC_ENABLED },
+	{ "PBES2-HS256+A128KW", JWE_ALG_UNMANAGED,	ALG_ENC_DISABLED },
+	{ "PBES2-HS384+A192KW", JWE_ALG_UNMANAGED,	ALG_ENC_DISABLED },
+	{ "PBES2-HS512+A256KW", JWE_ALG_UNMANAGED,	ALG_ENC_DISABLED },
+	{ NULL,			JWE_ALG_UNMANAGED,	ALG_ENC_DISABLED },
+};
+
+struct alg_enc *jwe_algs = NULL;
 
 /* https://datatracker.ietf.org/doc/html/rfc7518#section-5.1 */
 typedef enum {
@@ -82,15 +90,17 @@ typedef enum {
 	JWE_ENC_A256GCM,
 } jwe_enc;
 
-struct alg_enc jwe_encodings[] = {
-	{ "A128CBC-HS256", JWE_ENC_A128CBC_HS256 },
-	{ "A192CBC-HS384", JWE_ENC_A192CBC_HS384 },
-	{ "A256CBC-HS512", JWE_ENC_A256CBC_HS512 },
-	{ "A128GCM", JWE_ENC_A128GCM },
-	{ "A192GCM", JWE_ENC_A192GCM },
-	{ "A256GCM", JWE_ENC_A256GCM },
-	{ NULL, JWE_ENC_UNMANAGED },
+struct alg_enc jwe_encodings_dflt[] = {
+	{ "A128CBC-HS256",	JWE_ENC_A128CBC_HS256,	ALG_ENC_ENABLED },
+	{ "A192CBC-HS384",	JWE_ENC_A192CBC_HS384,	ALG_ENC_ENABLED },
+	{ "A256CBC-HS512",	JWE_ENC_A256CBC_HS512,	ALG_ENC_ENABLED },
+	{ "A128GCM",		JWE_ENC_A128GCM,	ALG_ENC_ENABLED },
+	{ "A192GCM",		JWE_ENC_A192GCM,	ALG_ENC_ENABLED },
+	{ "A256GCM",		JWE_ENC_A256GCM,	ALG_ENC_ENABLED },
+	{ NULL,			JWE_ENC_UNMANAGED,	ALG_ENC_DISABLED },
 };
+
+struct alg_enc *jwe_encodings = NULL;
 
 
 /*
@@ -131,6 +141,8 @@ static inline int parse_alg_enc(struct buffer *buf, struct alg_enc *array)
 
 	while (item->name) {
 		if (strncmp(item->name, b_orig(buf), (int)b_data(buf)) == 0) {
+			if (item->enabled == ALG_ENC_DISABLED)
+				return -1;
 			val = item->value;
 			break;
 		}
@@ -2057,6 +2069,165 @@ end:
 	clear_decoded_items(decoded_items);
 	return retval;
 }
+
+
+/*
+ * Duplicate algorithm and encoding arrays so that their enabled flags
+ * can be overwritten (when using the jwt.encrypt_alg/enc_list options).
+ * Return 0 in case of success, -1 otherwise.
+ */
+static int dup_alg_enc_arrays(void)
+{
+	int ret = -1;
+
+	if (!jwe_algs) {
+		jwe_algs = malloc(sizeof(jwe_algs_dflt));
+		if (!jwe_algs) {
+			ha_alert("Unable to allocate the JWE algorithms array.\n");
+			goto end;
+		}
+		memcpy(jwe_algs, jwe_algs_dflt, sizeof(jwe_algs_dflt));
+	}
+
+	if (!jwe_encodings) {
+		jwe_encodings = malloc(sizeof(jwe_encodings_dflt));
+		if (!jwe_encodings) {
+			ha_alert("Unable to allocate the JWE encodings array.\n");
+			goto end;
+		}
+		memcpy(jwe_encodings, jwe_encodings_dflt, sizeof(jwe_encodings_dflt));
+	}
+
+	ret = 0;
+
+end:
+	return ret;
+}
+
+static int jwe_init(void)
+{
+	/* Duplicate algorithm and encoding arrays so that their enabled flags
+	 * can be overwritten */
+	return dup_alg_enc_arrays();
+}
+
+REGISTER_PRE_CHECK(jwe_init);
+
+static void jwe_deinit(void)
+{
+	ha_free(&jwe_algs);
+	ha_free(&jwe_encodings);
+}
+
+REGISTER_POST_DEINIT(jwe_deinit);
+
+/*
+ * Look for an entry named <algname> in array <arr> and set its 'enabled' field
+ * to <value>.
+ * Return 0 in case of success, 1 otherwise (item not found).
+ */
+static int set_alg_enc_flag(struct alg_enc *arr, char *algname, int algname_len, int value)
+{
+	struct alg_enc *item = &arr[0];
+
+	while (item->name) {
+		if (algname_len == strlen(item->name) && strncmp(algname, item->name, algname_len) == 0) {
+			item->enabled = value;
+			return 0;
+		}
+		++item;
+	}
+
+	return 1;
+}
+
+/* Set the 'enabled' field to <val> for all members of <arr>. */
+static void set_all_alg_enc_flags(struct alg_enc *arr, int val)
+{
+	struct alg_enc *item = &arr[0];
+
+	while (item->name) {
+		item->enabled = val;
+		++item;
+	}
+}
+
+/*
+ * Parse algorithm list comprised of colon-separated algorithms having the same
+ * format as in jwe_algs_dflt or jwe_encodings_dflt arrays.
+ * When the option is used, all the algorithms are first disabled so any
+ * unspecified algo will not be enabled anymore.
+ */
+static int jwe_parse_global_alg_enc_list(char **args, int section_type, struct proxy *curpx,
+                                         const struct proxy *defpx, const char *file, int line,
+                                         char **err)
+{
+	struct alg_enc *arr = NULL;
+	char *p, *arg = args[1];
+	char *arg_end = arg+strlen(arg);
+	char *alg, *alg_end;
+
+	int value = ALG_ENC_ENABLED;
+	int ret = -1;
+
+	if (dup_alg_enc_arrays())
+		goto end;
+
+	if (args[0][14] == 'a') {
+		/* "jwe.supported_algorithms" */
+		arr = jwe_algs;
+	} else {
+		/* "jwe.supported_encodings" */
+		arr = jwe_encodings;
+	}
+
+	/* Disable all algorithms/encodings */
+	set_all_alg_enc_flags(arr, ALG_ENC_DISABLED);
+
+	while (*arg) {
+		value = ALG_ENC_ENABLED;
+
+		if (*arg == '!') {
+			++arg;
+			value = ALG_ENC_DISABLED;
+		}
+		alg = arg;
+		alg_end = NULL;
+
+		p = strchr(arg, ':');
+		if (p) {
+			alg_end = p;
+			arg = p + 1;
+		} else {
+			alg_end = arg_end;
+			arg = arg_end;
+		}
+
+		/* If "ALL" is used all previously disabled algo will be
+		 * reenabled */
+		if (strncmp(alg, "ALL", alg_end - alg) == 0) {
+			set_all_alg_enc_flags(arr, ALG_ENC_ENABLED);
+		} else {
+			if (set_alg_enc_flag(arr, alg, alg_end-alg, value) != 0) {
+				memprintf(err, "Unknown algorithm/encoding %.*s\n", (int)(alg_end-alg), alg);
+				goto end;
+			}
+		}
+	}
+
+	ret = 0;
+end:
+	return ret;
+
+}
+
+static struct cfg_kw_list cfg_kws = {ILH, {
+	{ CFG_GLOBAL, "jwt.decrypt_alg_list", jwe_parse_global_alg_enc_list },
+	{ CFG_GLOBAL, "jwt.decrypt_enc_list", jwe_parse_global_alg_enc_list },
+	{ 0, NULL, NULL },
+}};
+
+INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
 
 
 static struct sample_conv_kw_list sample_conv_kws = {ILH, {
