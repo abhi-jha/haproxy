@@ -1,6 +1,108 @@
 ChangeLog :
 ===========
 
+2026/05/08 : 3.4-dev11
+    - BUG/MEDIUM: acme: fix segfault on newOrder with empty authorizations
+    - BUG/MINOR: acme: skip auth/challenge steps when newOrder returns a certificate
+    - BUG/MINOR: sink: do not free existing sinks on allocation error
+    - CLEANUP: net_helper: fix incorrect const pointers in writev_n16()
+    - BUG/MINOR: vars: make parse_store() return error on var_set() failure
+    - BUG/MINOR: vars: don't store the variable twice with set-var-fmt
+    - BUG/MINOR: vars: only print first invalid char in fill_desc()
+    - BUG/MINOR: hpack: validate idx > 0 in hpack_valid_idx()
+    - MINOR: add an MPSC ring buffer implementation
+    - OPTIM: quic: rework the QUIC RX code
+    - MINOR: quic: store the DCID as an offset
+    - OPTIM: quic: reduce the size of struct quic_dgram
+    - BUG/MINOR: quic: handle cases where we don't have an address
+    - BUG/MEDIUM: cli: fix master CLI connection slot leak on client disconnect
+    - MEDIUM: mux-quic: extend shut to app proto layer
+    - MINOR: h3/hq_interop: implement stream reset on shut abort/kill-conn
+    - BUG/MINOR: acl: fix a possible arg corruption in smp_fetch_acl_parse()
+    - BUG/MINOR: map: do not leak a map descriptor on load error
+    - CLEANUP: map/cli: fix some map-related help messages
+    - BUG/MINOR: pattern: release the reference on failure to load from file
+    - CLEANUP: acl: remove duplicate test in parse_acl_expr() and unused variable
+    - CI: github: add DEBUG_STRICT=2 to ASAN jobs
+    - BUG/MINOR: quic: fix buffer overflow with sockaddr_in46
+    - BUG/MEDIUM: acme: fix stalled renewal when opportunistic DNS check fails
+    - BUG/MINOR: quic: fix trace crash on datagram receive
+    - MINOR: quic: fix trace spacing when datagram is displayed
+    - CLEANUP: mux-h2: remove the outdated condition to release h2c on timeout
+    - BUILD: add an EXTRA_MAKE option to build addons easily
+    - BUILD: otel: removed USE_OTEL, addon is now built via EXTRA_MAKE
+    - CLEANUP: otel: move opentelemetry outside haproxy sources
+    - BUG/MEDIUM: mux-h2: fix the body_len to check when parsing request trailers
+    - BUG/MAJOR: mux-h2: preset MSGF_BODY_CL on H2_SF_DATA_CLEN in h2c_dec_hdrs()
+    - DOC: otel: update the filter's status and URL in the docs
+    - DOC: acme: document missing acme-vars and provider-name keywords
+    - BUG/MINOR: dns: always validate the source address in responses
+    - BUG/MINOR: tcpcheck: Properly report error for http health-checks
+    - CLEANUP: resolvers: Remove duplicated line when resolvers proxy is initialized
+    - BUG/MINOR: resolvers: Free new requester on error when linking a resolution
+    - BUG/MINOR: resolvers: Fix lookup for a hostname in the state-file tree
+    - BUG/MINOR: resolvers: Free opts on parse error in resolv_parse_do_resolve()
+    - BUG/MAJOR: net_helper: also fix tcp_options_list for OOB write loop
+    - BUG/MEDIUM: ssl/sample: check output buffer size in aes_cbc_enc converter
+    - BUG/MAJOR: http-ana: fix private session retrieval on NTLM
+    - REGTESTS: add a regtest to validate various NTLM transitions
+    - BUG/MEDIUM: mworker/cli: fix user and operator permission via @@<pid> in master CLI
+    - BUG/MINOR: mworker/cli: check ci_insert() return value in pcli_parse_request()
+    - REGTESTS: http-messaging: always send RFC8441 client settings to use ext connect
+    - BUG/MINOR: h2: add decoding for :protocol in traces
+    - BUG/MINOR: mux-h2: condition the processing of 8441 extension to global setting
+    - MINOR: mux-h2: add a new message flag to indicate ext connect support
+    - BUG/MINOR: h2: only accept :protocol with extended CONNECT
+    - BUG/MINOR: acme: contact mail should be optional, don't pass ToS bool
+    - CLEANUP: http-fetch: Remove duplcated return statement in smp_fetch_stver()
+    - CLEANUP: http-fetch: Adjust smp_fetch_url32_src() comment
+    - CLEANUP: http-fetch: Fix indentation of sample_fetch_keywords
+    - BUG/MINOR: http_fetch: Check return values of unchecked buffer operations
+    - BUG/MINOR: http-fetch: Fix http_auth_bearer() when custom header is used
+    - BUG/MEDIUM: h1_htx: Remove reverved block on error during contig chunks parsing
+    - CLEANUP: haterm: Remove duplicated bloc to know if haterm must drain
+    - BUG/MINOR: haterm: Immediately report error when draining the request
+    - CLEANUP: haterm: Remove useless IS_HTX_SC() test
+    - BUG/MINOR: haterm: Fix a possible integer overflow on the request body length
+    - BUG/MEDIUM: haterm: Subscribe for receives until request was fully drained
+    - BUG/MINOR: haterm: Don't set HTX_FL_EOM flag on 100-Continue responses
+    - BUG/MEDIUM: haterm: Properly handle end of request and end of response
+    - BUG/MEDIUM: haterm: Properly handle client timeout
+    - BUG/MINOR: haterm: Fix condition to use direct data forwarding
+    - BUG/MINOR: haterm: Report a 400-bad-request error on receive error
+    - DEBUG: haterm: Add hstream flags in the trace messages
+    - MINOR: haterm: Remove now useless req_body field from hstream
+    - MINOR: mux_quic: reset stream after app shutdown for HTTP/0.9
+    - MINOR: mux_quic: do not perform unnecessary timeout handling on BE side
+    - BUG/MEDIUM: mux_quic: adjust qcc_is_dead() to account detached streams
+    - MINOR: mux_quic: simplify MUX_CTL_GET_NBSTRM
+    - MINOR: ssl: Export 'current_crtstore_name'
+    - MINOR: ssl: Factorize code from "new/set ssl cert" CLI command
+    - MINOR: ssl: Factorize ckch instance rebuild process
+    - MEDIUM: ssl: Refactorize "commit ssl cert"
+    - BUG/MINOR: ssl: Use the sequence number with kTLS and TLS 1.2
+    - BUG/MINOR: mux_quic: fix max stream ID reuse estimation
+    - MINOR: mux_quic: release BE conns if reuse definitely blocked
+    - BUG/MINOR: mux_quic: refresh timeout only if I/O performed
+    - MEDIUM: mux-h1: Return an error on h2 upgrade attempts if not allowed
+    - BUG/MEDIUM: mux-h2: Properly consume padding for DATA frames
+    - MEDIUM: tools: read_line_to_trash() handle empty files without \n
+    - MINOR: jws: support HMAC in jws_b64_protected(), make nonce optional
+    - MINOR: jws: introduce jws_b64_hmac_signature() function for HMAC signing
+    - MINOR: acme: implement EAB - external account binding
+    - MINOR: acme: allow specifying custom MAC alg for EAB
+    - REGTESTS: Fix h1_to_h2_upgrade.vtc to force h2 on first bind line
+    - MINOR: cli: allow specifying a tgid with show fd
+    - Revert "BUG/MEDIUM: cli: fix master CLI connection slot leak on client disconnect"
+    - BUILD: use Makefile.mk instead of Makefile.inc in EXTRA_MAKE
+    - Revert "BUG/MINOR: mux-h2: condition the processing of 8441 extension to global setting"
+    - BUG/MEDIUM: mux-h2: fix the detection of the ext connect support
+    - MINOR: jwe: Add option to enable/disable algorithms or encryption algorithms for jwt_decrypt
+    - MINOR: jwe: Disable 'RSA1_5' algorithm by default in jwt_decrypt converters
+    - BUG/MEDIUM: jwe: Fix jwt.decrypt_alg_list to work correctly
+    - BUG/MEDIUM: stick-table: properly check permissions on CLI's set/clear cmd
+    - DOC: acme: EAB is now supported
+
 2026/04/29 : 3.4-dev10
     - DOC: config: fix spelling of "max-threads-per-group" in the index
     - MEDIUM: threads: change the default max-threads-per-group value to 16
