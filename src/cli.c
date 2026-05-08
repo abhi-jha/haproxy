@@ -1879,28 +1879,26 @@ static int cli_parse_show_fd(char **args, char *payload, struct appctx *appctx, 
 			/* We allow the forms "<tgid>/" and "/<fd>" where the missing
 			 * value is considered a wildcard. So the first form means
 			 * "show me all the fds belonging to <tgid>", while the second
-			 * one means "show the fd <fd> for each thread group".
+			 * one means "show the fd <fd> for each thread group". Note
+			 * that the tgid is parsed but ignored for now - this code
+			 * will require changes once we split fd tables.
 			 */
-			if (c == args[2])
+			if (c == args[2]) {
 				ctx->tgid = -1;
-			else
+			} else {
 				ctx->tgid = atoi(args[2]);
-			if (ctx->tgid > MAX_TGROUPS)
-				return cli_err(appctx, "Invalid TGID.\n");
+				if (ctx->tgid <= 0 || ctx->tgid > MAX_TGROUPS)
+					return cli_err(appctx, "Invalid TGID.\n");
+			}
 			c++;
-			if (!*c)
-				ctx->fd = -1;
-			else
+			if (*c) {
 				ctx->fd = atoi(c);
+				ctx->show_one = 1;
+			}
 		} else {
 			ctx->fd = atoi(args[2]);
-		}
-
-		/* This will need to change when we implement split fd tables. We
-		 * completely ignore the tgid for now.
-		 */
-		if (ctx->fd != -1)
 			ctx->show_one = 1;
+		}
 	}
 
 	return 0;
