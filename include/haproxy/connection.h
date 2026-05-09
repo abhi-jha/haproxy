@@ -496,6 +496,64 @@ static inline int conn_install_mux(struct connection *conn, const struct mux_ops
 	return ret;
 }
 
+/* Calculates the approximate number of streams permitted for an already
+ * established frontend connection based on the number of active connections
+ * (including this one), the number of already committed streams in the current
+ * thread group, the limit, and the desired limit (a ratio of which will be
+ * applied as the budget permits). May return 0 for no limit. The minimum value
+ * when a limit is set will be 1 as a minimum.
+ */
+static inline uint conn_calc_max_streams(uint desired)
+{
+	uint per_conn_left;
+	uint avg_per_conn;
+	uint conn_curr;
+	int conn_left;
+	uint extra;
+	uint curr;
+
+	/* check for infinite */
+	if (!global.tune.streams_elasticity)
+		return 0;
+
+	/* check for none (0% overcommit) */
+	if (global.tune.streams_elasticity == 100)
+		return 1;
+
+	if (desired <= 1)
+		return 1;
+
+	conn_curr = _HA_ATOMIC_LOAD(&actconn) - 1;
+	conn_left = global.hardmaxconn - conn_curr;
+	if (conn_left <= 0)
+		return 1;
+
+	/* the limit is per process, we're working per group. Since we're
+	 * counting extra streams max, we subtract 100% from elasticity.
+	 */
+	extra = (((ullong)global.hardmaxconn * (global.tune.streams_elasticity - 100) / 100));
+	curr = _HA_ATOMIC_LOAD(&tg_ctx->committed_extra_streams) * global.nbtgroups;
+	if (curr >= extra)
+		return 1;
+
+	/* this is the average per conn left that we can allocate */
+	per_conn_left = ((extra - curr) + conn_left - 1) / conn_left;
+
+	/* OK so we know we can still allocate (extra - curr) streams per
+	 * tgroup, that will be shared across conn_left connections, but ought
+	 * to be fairly shared between all conn_curr ones. This allows to
+	 * provide at least up to <desired> as long as we leave enough for all
+	 * remaining connections left.
+	 */
+	avg_per_conn = ((ullong)(extra - curr) * (desired - 1)) / extra;
+
+	/* both values are permitted since they respect the global limit,
+	 * so let's deliver the best option to better serve first conns
+	 * so that the limit degrades smoothly with the number of conns.
+	 */
+	return 1 + MAX(per_conn_left, avg_per_conn);
+}
+
 /* Retrieves any valid stream connector from this connection, preferably the first
  * valid one. The purpose is to be able to figure one other end of a private
  * connection for purposes like source binding or proxy protocol header

@@ -2001,6 +2001,7 @@ The following keywords are supported in the "global" section :
    - tune.sndbuf.client
    - tune.sndbuf.frontend
    - tune.sndbuf.server
+   - tune.streams-elasticity
    - tune.stick-counters
    - tune.ssl.cachesize
    - tune.ssl.capture-buffer-size
@@ -5688,6 +5689,39 @@ tune.ssl.ssl-ctx-cache-size <number>
   entries. This is a LRU cache. Because generating a SSL certificate
   dynamically is expensive, they are cached. The default cache size is set to
   1000 entries.
+
+tune.streams-elasticity <number>
+  Defines a target percentage of streams per frontend connection relative to
+  the maximum number of concurrent connections (maxconn) when all connections
+  are established. This metric applies to multiplexed protocols like HTTP/2 or
+  QUIC, where each connection may receive multiple streams. At least one is
+  always guaranteed, so the percentage must be at least 100%. During connection
+  setup, HAProxy dynamically advertises additional streams up to the configured
+  limit, maintaining the target ratio. At connection establishment, every
+  frontend connection receives at least one stream; extra streams are assigned
+  based on the target percentage and configured stream limits. This ensures
+  efficient stream allocation under varying load conditions (more streams at
+  low loads, fewer at high loads).
+
+  Highly dynamic sites with many objects per page benefit from high ratios,
+  enabling many streams per connection. Sites using fewer streams on average
+  (WebSocket, application code) may prefer small ratios closer to 120 or 150
+  (20 to 50% more streams than connections) preventing excessive stream counts
+  under sustained loads.
+
+  The default value is 0, meaning no enforcement at this level, so only H2 and
+  QUIC configurations apply (with the default setting of 100 streams per
+  connection, this corresponds to 10000%). This remains the recommended setting
+  for small deployments (maxconn around a thousand). Moderately sized setups
+  (few thousands to tens of thousands connections) typically set the ratio
+  between 1000 and 5000, allowing 10 to 50 streams per connection at full load.
+  Large-scale deployments (hundreds of thousands to millions connections) might
+  use lower values (120 to 200) to support 1.2 to 2 streams per connection on
+  average at full load.
+
+  Monitoring the total number of active streams on backends, including queues,
+  provides a practical indicator of a sustainable target load and helps avoid
+  over-provisioning.
 
 tune.stick-counters <number>
   Sets the number of stick-counters that may be tracked at the same time by a

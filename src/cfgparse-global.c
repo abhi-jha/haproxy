@@ -1444,6 +1444,16 @@ static int cfg_parse_global_tune_opts(char **args, int section_type,
 			return -1;
 		}
 	}
+	else if (strcmp(args[0], "tune.streams-elasticity") == 0) {
+		char *stop;
+
+		global.tune.streams_elasticity = strtol(args[1], &stop, 10);
+		if (!*args[1] || *stop ||
+		    (global.tune.streams_elasticity && global.tune.streams_elasticity < 100)) {
+			memprintf(err, "'%s' expects 0 or a positive percentage value of 100 or above", args[0]);
+			return -1;
+		}
+	}
 	else if (strcmp(args[0], "tune.takeover-other-tg-connections") == 0) {
 		if (*(args[1]) == 0) {
 			memprintf(err, "'%s' expects 'none', 'restricted', or 'full'", args[0]);
@@ -1903,6 +1913,7 @@ static struct cfg_kw_list cfg_kws = {ILH, {
 	{ CFG_GLOBAL, "tune.runqueue-depth", cfg_parse_global_tune_opts },
 	{ CFG_GLOBAL, "tune.sndbuf.client", cfg_parse_global_tune_opts },
 	{ CFG_GLOBAL, "tune.sndbuf.server", cfg_parse_global_tune_opts },
+	{ CFG_GLOBAL, "tune.streams-elasticity", cfg_parse_global_tune_opts },
 	{ CFG_GLOBAL, "tune.takeover-other-tg-connections", cfg_parse_global_tune_opts },
 	{ CFG_GLOBAL, "unsetenv", cfg_parse_global_env_opts, KWF_DISCOVERY },
 	{ CFG_GLOBAL, "zero-warning", cfg_parse_global_mode, KWF_DISCOVERY },

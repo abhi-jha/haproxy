@@ -216,6 +216,7 @@ struct global {
 		uint max_checks_per_thread; /* if >0, no more than this concurrent checks per thread */
 		uint ring_queues;   /* if >0, #ring queues, otherwise equals #thread groups */
 		uint cli_max_payload_sz; /* The max payload size for the CLI */
+		int streams_elasticity;  /* percent of advertised streams to connection; 0=no limit */
 		enum threadgroup_takeover tg_takeover; /* Policy for threadgroup takeover */
 	} tune;
 	struct {
