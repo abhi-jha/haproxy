@@ -138,6 +138,7 @@ struct tgroup_ctx {
 	struct eb_root timers;            /* wait queue (sorted timers tree, global, accessed under wq_lock) */
 
 	uint niced_tasks;                 /* number of niced tasks in this group's run queues */
+	uint committed_extra_streams;     /* sum of extra front streams committed by muxes in this group */
 
 	/* pad to cache line (64B) */
 	char __pad[0];                    /* unused except to check remaining room */

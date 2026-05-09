@@ -1446,6 +1446,10 @@ static int h2_init(struct connection *conn, struct proxy *prx, struct session *s
 	h2c->st0 = H2_CS_PREFACE;
 	h2c->conn = conn;
 	h2c->streams_limit = h2c->streams_hard_limit = h2c_max_concurrent_streams(h2c);
+
+	if (!(h2c->flags & H2_CF_IS_BACK) && h2c->streams_hard_limit > 1)
+		_HA_ATOMIC_ADD(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
+
 	nb_rxbufs = (h2c->flags & H2_CF_IS_BACK) ? h2_be_rxbuf : h2_fe_rxbuf;
 	nb_rxbufs = (nb_rxbufs + global.tune.bufsize - 9 - 1) / (global.tune.bufsize - 9);
 	nb_rxbufs = MAX(nb_rxbufs, h2c->streams_limit);
@@ -1513,6 +1517,8 @@ static int h2_init(struct connection *conn, struct proxy *prx, struct session *s
 	TRACE_LEAVE(H2_EV_H2C_NEW, conn);
 	return 0;
   fail_stream:
+	if (!(h2c->flags & H2_CF_IS_BACK) && h2c->streams_hard_limit > 1)
+		_HA_ATOMIC_SUB(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
 	hpack_dht_free(h2c->ddht);
   fail:
 	task_destroy(t);
@@ -1590,6 +1596,9 @@ static void h2_release(struct h2c *h2c)
 	/* Rhttp connections are not accounted prior to their reverse. */
 	if (!conn || !conn_is_reverse(conn))
 		HA_ATOMIC_DEC(&h2c->px_counters->open_conns);
+
+	if (!(h2c->flags & H2_CF_IS_BACK) && h2c->streams_hard_limit > 1)
+		_HA_ATOMIC_SUB(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
 
 	pool_free(pool_head_h2_rx_bufs, h2c->shared_rx_bufs);
 	pool_free(pool_head_h2c, h2c);
@@ -4175,6 +4184,12 @@ static int h2_conn_reverse(struct h2c *h2c)
 		struct server *srv = __objt_server(h2c->conn->target);
 		struct proxy *prx = srv->proxy;
 
+		/* the connection was accounted as frontend streams before
+		 * reversal, we must undo that accounting now.
+		 */
+		if (h2c->streams_hard_limit > 1)
+			_HA_ATOMIC_SUB(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
+
 		h2c->flags |= H2_CF_IS_BACK;
 
 		h2c->shut_timeout = h2c->timeout = prx->timeout.server;
@@ -4192,6 +4207,10 @@ static int h2_conn_reverse(struct h2c *h2c)
 	else {
 		struct listener *l = __objt_listener(h2c->conn->target);
 		struct proxy *prx = l->bind_conf->frontend;
+
+		/* backend connections becoming frontend need accounting. */
+		if (h2c->streams_hard_limit > 1)
+			_HA_ATOMIC_ADD(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
 
 		h2c->flags &= ~H2_CF_IS_BACK;
 		/* Must manually init max_id so that GOAWAY can be emitted. */
