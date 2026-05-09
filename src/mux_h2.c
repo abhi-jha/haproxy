@@ -1447,8 +1447,18 @@ static int h2_init(struct connection *conn, struct proxy *prx, struct session *s
 	h2c->conn = conn;
 	h2c->streams_limit = h2c->streams_hard_limit = h2c_max_concurrent_streams(h2c);
 
-	if (!(h2c->flags & H2_CF_IS_BACK) && h2c->streams_hard_limit > 1)
-		_HA_ATOMIC_ADD(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
+	if (!(h2c->flags & H2_CF_IS_BACK)) {
+		uint max_strm = h2_fe_settings_max_concurrent_streams;
+
+		if (!max_strm)
+			max_strm = h2_settings_max_concurrent_streams;
+		max_strm = conn_calc_max_streams(max_strm);
+
+		if (max_strm && h2c->streams_hard_limit > max_strm)
+			h2c->streams_limit = h2c->streams_hard_limit = max_strm;
+		if (h2c->streams_hard_limit > 1)
+			_HA_ATOMIC_ADD(&tg_ctx->committed_extra_streams, h2c->streams_hard_limit - 1);
+	}
 
 	nb_rxbufs = (h2c->flags & H2_CF_IS_BACK) ? h2_be_rxbuf : h2_fe_rxbuf;
 	nb_rxbufs = (nb_rxbufs + global.tune.bufsize - 9 - 1) / (global.tune.bufsize - 9);
