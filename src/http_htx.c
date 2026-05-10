@@ -1763,13 +1763,13 @@ struct http_reply *http_parse_http_reply(const char **args, int *orig_arg, struc
 
 		if (reply->ctype) {
 			ha_warning("parsing [%s:%d] : content-type '%s' ignored by the http reply when used "
-				   "with an erorrfile.\n",
+				   "with an errorfile.\n",
 				   px->conf.args.file, px->conf.args.line, reply->ctype);
 			ha_free(&reply->ctype);
 		}
 		if (!LIST_ISEMPTY(&reply->hdrs)) {
 			ha_warning("parsing [%s:%d] : hdr parameters ignored by the http reply when used "
-				   "with an erorrfile.\n",
+				   "with an errorfile.\n",
 				   px->conf.args.file, px->conf.args.line);
 			list_for_each_entry_safe(hdr, hdrb, &reply->hdrs, list) {
 				LIST_DELETE(&hdr->list);

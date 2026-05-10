@@ -1771,7 +1771,7 @@ static void h1_show_error_snapshot(struct buffer *out, const struct error_snapsh
 	chunk_appendf(out,
 		      "  H1 connection flags 0x%08x, H1 stream flags 0x%08x\n"
 		      "  H1 msg state %s(%d), H1 msg flags 0x%08x\n"
-		      "  H1 chunk len %lld bytes, H1 body len %lld bytes :\n",
+		      "  H1 chunk len %llu bytes, H1 body len %llu bytes :\n",
 		      es->ctx.h1.c_flags, es->ctx.h1.s_flags,
 		      h1m_state_str(es->ctx.h1.state), es->ctx.h1.state,
 		      es->ctx.h1.m_flags, es->ctx.h1.m_clen, es->ctx.h1.m_blen);
@@ -4204,8 +4204,8 @@ static int h1_process(struct h1c * h1c)
 					se_fl_set(h1s->sd, SE_FL_ERROR); /* Set EOS here to release the SC */
 				}
 				h1c->errcode = 405;
-				TRACE_ERROR("H2 update not allowed", H1_EV_H1C_WAKE|H1_EV_H1C_ERR);
-				h1_report_glitch(h1c, 1, "H2 update not allowed");
+				TRACE_ERROR("H2 upgrade not allowed", H1_EV_H1C_WAKE|H1_EV_H1C_ERR);
+				h1_report_glitch(h1c, 1, "H2 upgrade not allowed");
 				h1_handle_parsing_error(h1c);
 				goto no_parsing;
 			}
