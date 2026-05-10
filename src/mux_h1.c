@@ -1670,7 +1670,7 @@ static void h1_update_req_conn_value(struct h1s *h1s, struct h1m *h1m, struct is
 {
 	struct proxy *px = h1s->h1c->px;
 
-	/* Don't update "Connection:" header in TUNNEL mode or if "Upgrage"
+	/* Don't update "Connection:" header in TUNNEL mode or if "Upgrade"
 	 * token is found
 	 */
 	if (h1s->flags & H1S_F_WANT_TUN || h1m->flags & H1_MF_CONN_UPG)
@@ -1692,7 +1692,7 @@ static void h1_update_req_conn_value(struct h1s *h1s, struct h1m *h1m, struct is
 
 static void h1_update_res_conn_value(struct h1s *h1s, struct h1m *h1m, struct ist *conn_val)
 {
-	/* Don't update "Connection:" header in TUNNEL mode or if "Upgrage"
+	/* Don't update "Connection:" header in TUNNEL mode or if "Upgrade"
 	 * token is found
 	 */
 	if (h1s->flags & H1S_F_WANT_TUN || h1m->flags & H1_MF_CONN_UPG)

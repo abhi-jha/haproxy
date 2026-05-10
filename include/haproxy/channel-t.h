@@ -76,7 +76,7 @@
 
 #define CF_WAKE_ONCE      0x10000000  /* pretend there is activity on this channel (one-shoot) */
 #define CF_FLT_ANALYZE    0x20000000  /* at least one filter is still analyzing this channel */
-/* unuse 0x40000000 */
+/* unused 0x40000000 */
 #define CF_ISRESP         0x80000000  /* 0 = request channel, 1 = response channel */
 
 /* Masks which define input events for stream analysers */
@@ -252,27 +252,30 @@ struct channel {
  * without waking the parent up. The special value CHN_INFINITE_FORWARD is
  * never decreased nor increased.
  *
- * The buf->o parameter says how many bytes may be consumed from the visible
- * buffer. This parameter is updated by any buffer_write() as well as any data
- * forwarded through the visible buffer. Since the ->to_forward attribute
- * applies to data after buf->p, an analyser will not see a buffer which has a
- * non-null ->to_forward with buf->i > 0. A producer is responsible for raising
- * buf->o by min(to_forward, buf->i) when it injects data into the buffer.
+ * The channel's consumed data count (b_data(chn->buf)) says how many bytes may
+ * be consumed from the visible buffer. This is updated by any buffer_write()
+ * as well as any data forwarded through the visible buffer. Since the
+ * ->to_forward attribute applies to data beyond what's already been accounted
+ * for, an analyser will not see a buffer which has a non-null ->to_forward
+ * with additional unprocessed data. A producer is responsible for raising the
+ * consumed count by min(to_forward, available_data) when it injects data into
+ * the buffer.
  *
- * The consumer is responsible for decreasing ->buf->o when it sends data
- * from the visible buffer, and ->pipe->data when it sends data from the
- * invisible buffer.
+ * The consumer is responsible for advancing the consumed count (via
+ * b_ack()) when it sends data from the visible buffer, and for updating
+ * ->pipe->data when it sends data from the invisible buffer.
  *
  * A real-world example consists in part in an HTTP response waiting in a
  * buffer to be forwarded. We know the header length (300) and the amount of
  * data to forward (content-length=9000). The buffer already contains 1000
  * bytes of data after the 300 bytes of headers. Thus the caller will set
- * buf->o to 300 indicating that it explicitly wants to send those data, and
- * set ->to_forward to 9000 (content-length). This value must be normalised
- * immediately after updating ->to_forward : since there are already 1300 bytes
- * in the buffer, 300 of which are already counted in buf->o, and that size
- * is smaller than ->to_forward, we must update buf->o to 1300 to flush the
- * whole buffer, and reduce ->to_forward to 8000. After that, the producer may
+ * the consumed count to 300 indicating that it explicitly wants to send those
+ * data, and set ->to_forward to 9000 (content-length). This value must be
+ * normalised immediately after updating ->to_forward : since there are already
+ * 1300 bytes in the buffer, 300 of which are already counted in the consumed
+ * count, and that size is smaller than ->to_forward, we must update the
+ * consumed count to 1300 to flush the whole buffer, and reduce ->to_forward to
+ * 8000. After that, the producer may
  * try to feed the additional data through the invisible buffer using a
  * platform-specific method such as splice().
  *
@@ -291,15 +294,16 @@ struct channel {
  * buf->size - global.maxrewrite + ->to_forward.
  *
  * A buffer may contain up to 5 areas :
- *   - the data waiting to be sent. These data are located between buf->p-o and
- *     buf->p ;
- *   - the data to process and possibly transform. These data start at
- *     buf->p and may be up to ->i bytes long.
- *   - the data to preserve. They start at ->p and stop at ->p+i. The limit
- *     between the two solely depends on the protocol being analysed.
+ *   - the data already consumed (acknowledged). These data are located between
+ *     b_lim(b) and b_head(b) ;
+ *   - the data available to process and possibly transform. These data start at
+ *     b_head(b) and may be up to b_data(b) bytes long.
+ *   - the data to preserve. They start at b_head(b) and stop at
+ *     b_lim(b) + b_data(b). The limit between the two solely depends on the
+ *     protocol being analysed.
  *   - the spare area : it is the remainder of the buffer, which can be used to
- *     store new incoming data. It starts at ->p+i and is up to ->size-i-o long.
- *     It may be limited by global.maxrewrite.
+ *     store new incoming data. It starts at b_lim(b) + b_data(b) and is up to
+ *     b->size - b_data(b) long. It may be limited by global.maxrewrite.
  *   - the reserved area : this is the area which must not be filled and is
  *     reserved for possible rewrites ; it is up to global.maxrewrite bytes
  *     long.

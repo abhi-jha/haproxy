@@ -1,5 +1,5 @@
 /*
- * include/haproxy/http_htx-t.h
+ * include/haproxy/http_htx.h
  * This file defines function prototypes for HTTP manipulation using the
  * internal representation.
  *

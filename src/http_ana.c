@@ -4827,7 +4827,7 @@ struct http_reply *http_error_message(struct stream *s)
 }
 
 /* Produces an HTX message from an http reply. Depending on the http reply type,
- * a, errorfile, an raw file or a log-format string is used. On success, it
+ * an errorfile, a raw file or a log-format string is used. On success, it
  * returns 0. If an error occurs -1 is returned. If it fails, this function only
  * exits. It is the caller responsibility to do the cleanup.
  */

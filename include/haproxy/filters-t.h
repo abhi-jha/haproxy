@@ -1,5 +1,5 @@
 /*
- * include/haproxy/filteers-t.h
+ * include/haproxy/filters-t.h
  * This file defines everything related to stream filters.
  *
  * Copyright (C) 2015 Qualys Inc., Christopher Faulet <cfaulet@qualys.com>

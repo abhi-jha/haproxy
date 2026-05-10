@@ -54,7 +54,7 @@ unsigned long long __channel_forward(struct channel *chn, unsigned long long byt
 	if (!budget)
 		return forwarded;
 
-	/* Now we must ensure chn->to_forward sats below CHN_INFINITE_FORWARD,
+	/* Now we must ensure chn->to_forward stays below CHN_INFINITE_FORWARD,
 	 * which also implies it won't overflow. It's less operations in 64-bit.
 	 */
 	bytes = (unsigned long long)chn->to_forward + budget;
@@ -105,7 +105,7 @@ int co_inject(struct channel *chn, const char *msg, int len)
  * controls. The chn->o and to_forward pointers are updated. If the channel
  * input is closed, -2 is returned. If there is not enough room left in the
  * buffer, -1 is returned. Otherwise the number of bytes copied is returned
- * (1). Channel flag READ_PARTIAL is updated if some data can be transferred.
+ * (1). Channel flag CF_READ_EVENT is set if some data can be transferred.
  */
 int ci_putchr(struct channel *chn, char c)
 {
@@ -134,7 +134,7 @@ int ci_putchr(struct channel *chn, char c)
  * input is closed, -2 is returned. If the block is too large for this buffer,
  * -3 is returned. If there is not enough room left in the buffer, -1 is
  * returned. Otherwise the number of bytes copied is returned (0 being a valid
- * number). Channel flag READ_PARTIAL is updated if some data can be
+ * number). Channel flag CF_READ_EVENT is set if some data can be
  * transferred.
  */
 int ci_putblk(struct channel *chn, const char *blk, int len)

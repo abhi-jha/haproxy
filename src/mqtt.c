@@ -144,7 +144,7 @@ const uint64_t mqtt_fields_per_packet[MQTT_CPT_ENTRIES] = {
 };
 
 /* Checks the first byte of a message to read the fixed header and extract the
- * packet type and flags. <parser> is supposed to point to the fix header byte.
+ * packet type and flags. <parser> is supposed to point to the fixed header byte.
  *
  * Fix header looks like:
  * +-------+-----------+-----------+-----------+---------+----------+----------+---------+------------+

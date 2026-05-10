@@ -196,7 +196,7 @@ int regex_exec_match(const struct my_regex *preg, const char *subject,
 			pmatch[i].rm_eo = matches[(i*2)+1];
 			continue;
 		}
-		/* Set the unmatvh flag (-1). */
+		/* Set the unmatched flag (-1). */
 		pmatch[i].rm_so = -1;
 		pmatch[i].rm_eo = -1;
 	}
@@ -212,7 +212,7 @@ int regex_exec_match(const struct my_regex *preg, const char *subject,
 #endif
 }
 
-/* This function apply regex. It take a "char *" ans length as input. The
+/* This function applies a regex. It takes a "char *" and length as input. The
  * <subject> can be modified during the processing. If the function doesn't
  * match, it returns false, else it returns true.
  * When it is compiled with standard POSIX regex or PCRE, this function add
@@ -280,7 +280,7 @@ int regex_exec_match2(const struct my_regex *preg, char *subject, int length,
 			pmatch[i].rm_eo = matches[(i*2)+1];
 			continue;
 		}
-		/* Set the unmatvh flag (-1). */
+		/* Set the unmatched flag (-1). */
 		pmatch[i].rm_so = -1;
 		pmatch[i].rm_eo = -1;
 	}

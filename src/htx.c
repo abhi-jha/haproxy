@@ -167,7 +167,7 @@ static struct htx_blk *htx_reserve_nxblk(struct htx *htx, uint32_t blksz)
 	/* Find the block's position. First, we try to get the next position in
 	 * the message, increasing the tail by one. If this position is not
 	 * available with some holes, we try to defrag the blocks without
-	 * touching their paylood. If it is impossible, we fully defrag the
+	 * touching their payload. If it is impossible, we fully defrag the
 	 * message.
 	 */
 	tail = htx->tail + 1;
@@ -1358,7 +1358,7 @@ struct buffer *__htx_xfer_to_small_buffer(struct buffer *dst, struct buffer *src
 }
 
 /* If possible, transfer HTX blocks from <src> to a large buffer. This function
- * allocate the small buffer and makes <dst> point on it. If <dst> is not empty
+ * allocates the large buffer and makes <dst> point on it. If <dst> is not empty
  * or if <src> contains to many data, NULL is returned. If the allocation
  * failed, NULL is returned. Otherwise <dst> is returned.  <flags> instructs how
  * the transfer must be performed.

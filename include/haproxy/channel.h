@@ -808,7 +808,7 @@ static inline size_t channel_data(const struct channel *chn)
 	return (IS_HTX_STRM(chn_strm(chn)) ? htx_used_space(htxbuf(&chn->buf)) : c_data(chn));
 }
 
-/* Returns the amount of input data in a channel, taking he HTX streams into
+/* Returns the amount of input data in a channel, taking the HTX streams into
  * account. This function relies on channel_data().
  */
 static inline size_t channel_input_data(const struct channel *chn)
@@ -816,7 +816,7 @@ static inline size_t channel_input_data(const struct channel *chn)
 	return channel_data(chn) - co_data(chn);
 }
 
-/* Returns 1 if the channel is empty, taking he HTX streams into account */
+/* Returns 1 if the channel is empty, taking the HTX streams into account */
 static inline size_t channel_empty(const struct channel *chn)
 {
 	return (IS_HTX_STRM(chn) ? htx_is_empty(htxbuf(&chn->buf)) : c_empty(chn));
@@ -861,7 +861,7 @@ static inline void channel_check_xfer(struct channel *chn, size_t xferred)
 			chn->flags &= ~(CF_STREAMER | CF_STREAMER_FAST);
 		}
 		else if (chn->xfer_small >= 2) {
-			/* if the buffer has been at least half full twchne,
+			/* if the buffer has been at least half full times,
 			 * we receive faster than we send, so at least it
 			 * is not a "fast streamer".
 			 */

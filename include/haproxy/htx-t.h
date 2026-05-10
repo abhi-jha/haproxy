@@ -128,7 +128,7 @@
  */
 #define HTX_SL_F_NONE           0x00000000
 #define HTX_SL_F_IS_RESP        0x00000001 /* It is the response start-line (unset means the request one) */
-#define HTX_SL_F_XFER_LEN       0x00000002 /* The message xfer size can be dertermined */
+#define HTX_SL_F_XFER_LEN       0x00000002 /* The message xfer size can be determined */
 #define HTX_SL_F_XFER_ENC       0x00000004 /* The transfer-encoding header was found in message */
 #define HTX_SL_F_CLEN           0x00000008 /* The content-length header was found in message */
 #define HTX_SL_F_CHNK           0x00000010 /* The message payload is chunked */
@@ -140,7 +140,7 @@
 #define HTX_SL_F_HAS_AUTHORITY  0x00000400 /* The request authority is explicitly specified */
 #define HTX_SL_F_NORMALIZED_URI 0x00000800 /* The received URI is normalized (an implicit absolute-uri form) */
 #define HTX_SL_F_CONN_UPG       0x00001000 /* The message contains "connection: upgrade" header */
-#define HTX_SL_F_BODYLESS_RESP  0x00002000 /* The response to this message is bodyloess (only for reqyest) */
+#define HTX_SL_F_BODYLESS_RESP  0x00002000 /* The response to this message is bodyloess (only for request) */
 #define HTX_SL_F_NOT_HTTP       0x00004000 /* Not an HTTP message (e.g "RTSP", only possible if invalid message are accepted) */
 
 /* This function is used to report flags in debugging tools. Please reflect

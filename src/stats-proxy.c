@@ -827,7 +827,7 @@ int stats_fill_sv_line(struct proxy *px, struct server *sv, int flags,
 		stats_fill_sv_computestate(sv, ref, &state);
 	}
 
-	/* compue time values for later use */
+	/* compute time values for later use */
 	if (index == NULL || *index == ST_I_PX_QTIME ||
 	    *index == ST_I_PX_CTIME || *index == ST_I_PX_RTIME ||
 	    *index == ST_I_PX_TTIME) {

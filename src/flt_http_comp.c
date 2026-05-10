@@ -767,8 +767,8 @@ static int
 htx_compression_buffer_init(struct htx *htx, struct buffer *out)
 {
 	/* output stream requires at least 10 bytes for the gzip header, plus
-	 * at least 8 bytes for the gzip trailer (crc+len), plus a possible
-	 * plus at most 5 bytes per 32kB block and 2 bytes to close the stream.
+	 * at least 8 bytes for the gzip trailer (crc+len), plus at most
+	 * 5 bytes per 32kB block and 2 bytes to close the stream.
 	 */
 	if (htx_free_space(htx) < 20 + 5 * ((htx->data + 32767) >> 15))
 		return -1;

@@ -826,7 +826,7 @@ static inline int get_addr_len(const struct sockaddr_storage *addr)
 	return 0;
 }
 
-/* set port in host byte order */
+/* set port in network byte order (use htons() before calling) */
 static inline int set_net_port(struct sockaddr_storage *addr, int port)
 {
 	switch (addr->ss_family) {
@@ -840,7 +840,7 @@ static inline int set_net_port(struct sockaddr_storage *addr, int port)
 	return 0;
 }
 
-/* set port in network byte order */
+/* set port in host byte order */
 static inline int set_host_port(struct sockaddr_storage *addr, int port)
 {
 	switch (addr->ss_family) {
