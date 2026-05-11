@@ -35,7 +35,8 @@ static const struct name_desc qcm_trace_decoding[] = {
 };
 
 struct trace_source trace_qcm = {
-	.name = IST("qmux"),
+	.name = IST("qcm"),
+	.alias = IST("qmux"),
 	.desc = "QUIC multiplexer",
 	.arg_def = TRC_ARG1_CONN,  /* TRACE()'s first argument is always a connection */
 	.default_cb = qcm_trace,
@@ -129,7 +130,7 @@ static void qcm_trace_fill_ctx(struct trace_ctx *ctx, const struct trace_source 
 }
 
 
-/* register qmux traces */
+/* register qcm traces */
 INITCALL1(STG_REGISTER, trace_register_source, TRACE_SOURCE);
 
 static char *qcc_app_st_to_str(const enum qcc_app_st st)

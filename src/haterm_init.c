@@ -56,7 +56,7 @@ static const char *haterm_cfg_traces_str =
             "\ttrace h1 sink stderr level user start now verbosity minimal\n"
             "\ttrace h2 sink stderr level user start now verbosity minimal\n"
             "\ttrace h3 sink stderr level user start now verbosity minimal\n"
-            "\ttrace qmux sink stderr level user start now verbosity minimal\n";
+            "\ttrace qcm sink stderr level user start now verbosity minimal\n";
 
 /* Very small API similar to buffer API to carefully build some strings */
 #define HBUF_NULL ((struct hbuf) { })
