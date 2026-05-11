@@ -22,7 +22,6 @@
 extern struct userlist *userlist;
 
 struct userlist *auth_find_userlist(char *name);
-unsigned int auth_resolve_groups(struct userlist *l, char *groups);
 int userlist_postinit();
 void userlist_free(struct userlist *ul);
 struct pattern *pat_match_auth(struct sample *smp, struct pattern_expr *expr, int fill);
