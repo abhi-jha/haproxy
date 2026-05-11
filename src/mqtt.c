@@ -1196,7 +1196,7 @@ static int mqtt_parse_connack(struct ist parser, struct mqtt_pkt *mpkt)
 				break;
 
 			default:
-				return 0;
+				goto end;
 			}
 
 			if (!isttest(props))
