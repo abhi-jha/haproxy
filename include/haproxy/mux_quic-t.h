@@ -89,12 +89,12 @@ struct qcc {
 				struct quic_pacer pacer; /* engine used to pace emission */
 				int paced_sent_ctr; /* counter for when emission is interrupted due to pacing */
 			};
-			/* qstrm */
-			struct buffer qstrm_buf;
+			/* qmux */
+			struct buffer qmux_buf;
 		};
 	} tx;
 	struct {
-		struct buffer qstrm_buf;
+		struct buffer qmux_buf;
 		uint64_t rlen; /* last record length read */
 	} rx;
 
@@ -179,7 +179,7 @@ struct qcs {
 	struct {
 		union {
 			struct qc_stream_desc *stream; /* quic */
-			struct buffer qstrm_buf;       /* qstrm */
+			struct buffer qmux_buf;        /* qmux */
 		};
 		struct quic_fctl fc; /* stream flow control applied on sending */
 		struct quic_frame *msd_frm; /* MAX_STREAM_DATA frame prepared */

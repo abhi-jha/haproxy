@@ -117,7 +117,7 @@ static void qcs_free(struct qcs *qcs)
 		qc_stream_desc_release(qcs->tx.stream, qcs->tx.fc.off_real, qcc);
 	}
 	else if (!conn_is_quic(qcc->conn)) {
-		b_free(&qcs->tx.qstrm_buf);
+		b_free(&qcs->tx.qmux_buf);
 	}
 
 	/* Free Rx buffer. */
@@ -224,7 +224,7 @@ static struct qcs *qcs_new(struct qcc *qcc, uint64_t id, enum qcs_type type)
 			qc_stream_desc_sub_room(qcs->tx.stream, qcm_ctrl_room);
 		}
 		else {
-			qcs->tx.qstrm_buf = BUF_NULL;
+			qcs->tx.qmux_buf = BUF_NULL;
 		}
 	}
 
@@ -610,13 +610,13 @@ void qcs_notify_send(struct qcs *qcs)
 const struct buffer *qcs_tx_buf_const(const struct qcs *qcs)
 {
 	return conn_is_quic(qcs->qcc->conn) ?
-	  qc_stream_buf_get(qcs->tx.stream) : &qcs->tx.qstrm_buf;
+	  qc_stream_buf_get(qcs->tx.stream) : &qcs->tx.qmux_buf;
 }
 
 struct buffer *qcs_tx_buf(struct qcs *qcs)
 {
 	return conn_is_quic(qcs->qcc->conn) ?
-	  qc_stream_buf_get(qcs->tx.stream) : &qcs->tx.qstrm_buf;
+	  qc_stream_buf_get(qcs->tx.stream) : &qcs->tx.qmux_buf;
 }
 
 /* Returns total number of bytes not already sent to quic-conn layer. */
@@ -2718,7 +2718,7 @@ static int qcc_send_frames(struct qcc *qcc, struct list *frms, int stream)
 	}
 
 	return conn_is_quic(qcc->conn) ? qcc_quic_send_frames(qcc, frms, stream) :
-	                                 qcc_qstrm_send_frames(qcc, frms);
+	                                 qcc_qmux_send_frames(qcc, frms);
 }
 
 /* Emit a RESET_STREAM on <qcs>.
@@ -3267,7 +3267,7 @@ static int qcc_io_recv(struct qcc *qcc)
 
 	if (!conn_is_quic(qcc->conn)) {
 		if (!(qcc->wait_event.events & SUB_RETRY_RECV))
-			qcc_qstrm_recv(qcc);
+			qcc_qmux_recv(qcc);
 	}
 
 	while (!LIST_ISEMPTY(&qcc->recv_list)) {
@@ -3587,8 +3587,8 @@ static void qcc_release(struct qcc *qcc)
 	TRACE_PROTO("application layer released", QMUX_EV_QCC_END, conn);
 
 	if (conn && !conn_is_quic(conn)) {
-		b_free(&qcc->rx.qstrm_buf);
-		b_free(&qcc->tx.qstrm_buf);
+		b_free(&qcc->rx.qmux_buf);
+		b_free(&qcc->tx.qmux_buf);
 		offer_buffers(NULL, 2);
 	}
 
@@ -3908,13 +3908,13 @@ static int qcm_init(struct connection *conn, struct proxy *prx,
 	}
 
 	if (!conn_is_quic(conn)) {
-		qcc->tx.qstrm_buf = BUF_NULL;
-		qcc->rx.qstrm_buf = BUF_NULL;
+		qcc->tx.qmux_buf = BUF_NULL;
+		qcc->rx.qmux_buf = BUF_NULL;
 
 		/* Rx buffer is transferred from xprt layer - necessary if too many data were read */
-		qcc->rx.rlen = xprt_qstrm_xfer_rxbuf(conn->xprt_ctx, &qcc->rx.qstrm_buf);
+		qcc->rx.rlen = xprt_qstrm_xfer_rxbuf(conn->xprt_ctx, &qcc->rx.qmux_buf);
 		/* Cannot have a non empty record with an empty buffer. */
-		BUG_ON(qcc->rx.rlen && !b_data(&qcc->rx.qstrm_buf));
+		BUG_ON(qcc->rx.rlen && !b_data(&qcc->rx.qmux_buf));
 	}
 
 	if (conn_is_back(conn)) {
@@ -3980,7 +3980,7 @@ static int qcm_init(struct connection *conn, struct proxy *prx,
 	}
 	else {
 		/* Wakeup MUX immediately if data copied from XPRT layer. */
-		if (unlikely(b_data(&qcc->rx.qstrm_buf)))
+		if (unlikely(b_data(&qcc->rx.qmux_buf)))
 			tasklet_wakeup(qcc->wait_event.tasklet);
 	}
 
@@ -4788,7 +4788,7 @@ static struct mux_proto_list mux_proto_quic =
 
 INITCALL1(STG_REGISTER, register_mux_proto, &mux_proto_quic);
 
-static const struct mux_ops qstrm_ops = {
+static const struct mux_ops qmux_ops = {
 	.init        = qcm_init,
 	.destroy     = qcm_destroy,
 	.detach      = qcm_strm_detach,
@@ -4812,7 +4812,7 @@ static const struct mux_ops qstrm_ops = {
 	.name = "QMUX",
 };
 
-static struct mux_proto_list mux_proto_qstrm =
-  { .token = IST("qmux"), .mode = PROTO_MODE_HTTP, .side = PROTO_SIDE_BOTH, .mux = &qstrm_ops };
+static struct mux_proto_list mux_proto_qmux =
+  { .token = IST("qmux"), .mode = PROTO_MODE_HTTP, .side = PROTO_SIDE_BOTH, .mux = &qmux_ops };
 
-INITCALL1(STG_REGISTER, register_mux_proto, &mux_proto_qstrm);
+INITCALL1(STG_REGISTER, register_mux_proto, &mux_proto_qmux);

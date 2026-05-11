@@ -14,7 +14,7 @@
 #include <haproxy/trace.h>
 
 /* Returns true if <frm> type can be used for QMux protocol. */
-static int qstrm_is_frm_valid(const struct quic_frame *frm)
+static int qmux_is_frm_valid(const struct quic_frame *frm)
 {
 	return frm->type == QUIC_FT_PADDING ||
 	  frm->type == QUIC_FT_RESET_STREAM ||
@@ -37,7 +37,7 @@ static int qstrm_is_frm_valid(const struct quic_frame *frm)
  * Returns the frame length on success. If frame is truncated, 0 is returned.
  * A negative error code is used for fatal failures.
  */
-static int qstrm_parse_frm(struct qcc *qcc, struct buffer *buf)
+static int qmux_parse_frm(struct qcc *qcc, struct buffer *buf)
 {
 	struct quic_frame frm;
 	const unsigned char *pos, *old, *end;
@@ -49,7 +49,7 @@ static int qstrm_parse_frm(struct qcc *qcc, struct buffer *buf)
 	if (!ret)
 		return 0;
 
-	if (!qstrm_is_frm_valid(&frm)) {
+	if (!qmux_is_frm_valid(&frm)) {
 		/* TODO close connection with FRAME_ENCODING_ERROR */
 		b_reset(buf);
 		return -1;
@@ -100,10 +100,10 @@ static int qstrm_parse_frm(struct qcc *qcc, struct buffer *buf)
  *
  * Returns the total amount of read data or -1 on error.
  */
-int qcc_qstrm_recv(struct qcc *qcc)
+int qcc_qmux_recv(struct qcc *qcc)
 {
 	struct connection *conn = qcc->conn;
-	struct buffer *buf = &qcc->rx.qstrm_buf;
+	struct buffer *buf = &qcc->rx.qmux_buf;
 	struct buffer buf_rec;
 	int total = 0, dec = 1, frm_ret;
 	size_t ret = 1;
@@ -114,7 +114,7 @@ int qcc_qstrm_recv(struct qcc *qcc)
 		return 0;
 
 	if (!b_alloc(buf, DB_MUX_RX)) {
-		TRACE_ERROR("rx qstrm buf alloc failure", QMUX_EV_QCC_RECV);
+		TRACE_ERROR("rx qmux buf alloc failure", QMUX_EV_QCC_RECV);
 		goto err;
 	}
 
@@ -170,7 +170,7 @@ int qcc_qstrm_recv(struct qcc *qcc)
 		while (qcc->rx.rlen && b_data(buf) >= qcc->rx.rlen) {
 			buf_rec = b_make(b_orig(buf), b_size(buf),
 			                 b_head_ofs(buf), qcc->rx.rlen);
-			frm_ret = qstrm_parse_frm(qcc, &buf_rec);
+			frm_ret = qmux_parse_frm(qcc, &buf_rec);
 
 			BUG_ON(frm_ret < 0); /* TODO handle fatal errors */
 			if (!frm_ret) {
@@ -208,7 +208,7 @@ int qcc_qstrm_recv(struct qcc *qcc)
 }
 
 /* Updates a <qcs> stream after a successful emission of data of length <data>. */
-static void qstrm_ctrl_send(struct qcs *qcs, uint64_t data)
+static void qmux_ctrl_send(struct qcs *qcs, uint64_t data)
 {
 	struct qcc *qcc = qcs->qcc;
 	struct quic_fctl *fc_conn = &qcc->tx.fc;
@@ -234,7 +234,7 @@ static void qstrm_ctrl_send(struct qcs *qcs, uint64_t data)
 		            QMUX_EV_QCS_SEND, qcc->conn, qcs);
 	}
 
-	b_del(&qcs->tx.qstrm_buf, data);
+	b_del(&qcs->tx.qmux_buf, data);
 	/* Release buffer if everything sent and stream is waiting for room. */
 	if (!qcs_prep_bytes(qcs) && (qcs->flags & QC_SF_BLK_MROOM)) {
 		qcs->flags &= ~QC_SF_BLK_MROOM;
@@ -275,12 +275,12 @@ static void qstrm_ctrl_send(struct qcs *qcs, uint64_t data)
  * Returns 0 if all data are emitted or a positive value if sending should be
  * retried later. A negative error code is used for a fatal failure.
  */
-int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
+int qcc_qmux_send_frames(struct qcc *qcc, struct list *frms)
 {
 	struct connection *conn = qcc->conn;
 	struct quic_frame *frm, *frm_old;
 	struct quic_frame *split_frm, *next_frm;
-	struct buffer *buf = &qcc->tx.qstrm_buf;
+	struct buffer *buf = &qcc->tx.qmux_buf;
 	unsigned char *pos, *old, *end;
 	size_t sent;
 	int ret, lensz, enc;
@@ -288,7 +288,7 @@ int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
 	TRACE_ENTER(QMUX_EV_QCC_SEND, qcc->conn);
 
 	if (!b_alloc(buf, DB_MUX_TX)) {
-		TRACE_ERROR("tx qstrm buf alloc failure", QMUX_EV_QCC_SEND);
+		TRACE_ERROR("tx qmux buf alloc failure", QMUX_EV_QCC_SEND);
 		goto out;
 	}
 
@@ -366,7 +366,7 @@ int qcc_qstrm_send_frames(struct qcc *qcc, struct list *frms)
 		b_del(buf, sent);
 
 		if (frm->type >= QUIC_FT_STREAM_8 && frm->type <= QUIC_FT_STREAM_F)
-			qstrm_ctrl_send(frm->stream.stream, frm->stream.len);
+			qmux_ctrl_send(frm->stream.stream, frm->stream.len);
 
 		if (split_frm) {
 			qc_frm_free(NULL, &split_frm);
