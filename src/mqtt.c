@@ -1127,13 +1127,13 @@ static int mqtt_parse_connack(struct ist parser, struct mqtt_pkt *mpkt)
 				break;
 
 			case MQTT_PROP_SUBSCRIPTION_IDENTIFIERS_AVAILABLE:
-				if (fields & MQTT_FN_BIT_SUBSCRIPTION_IDENTIFIER)
+				if (fields & MQTT_FN_BIT_SUBSCRIPTION_IDENTIFIERS_AVAILABLE)
 					goto end;
 				props = mqtt_read_1byte_int(istnext(props), &mpkt->data.connack.var_hdr.props.subscription_identifiers_available);
 				/* can have only 2 values: 0 or 1 */
 				if (mpkt->data.connack.var_hdr.props.subscription_identifiers_available > 1)
 					goto end;
-				fields |= MQTT_FN_BIT_SUBSCRIPTION_IDENTIFIER;
+				fields |= MQTT_FN_BIT_SUBSCRIPTION_IDENTIFIERS_AVAILABLE;
 				break;
 
 			case MQTT_PROP_SHARED_SUBSRIPTION_AVAILABLE:
