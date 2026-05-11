@@ -278,7 +278,7 @@ struct connack {
 			} user_props[MQTT_PROP_USER_PROPERTY_ENTRIES];
 			uint8_t  wildcard_subscription_available;
 			uint8_t  subscription_identifiers_available;
-			uint8_t  shared_subsription_available;
+			uint8_t  shared_subscription_available;
 			uint16_t server_keepalive;
 			struct ist response_information;
 			struct ist server_reference;

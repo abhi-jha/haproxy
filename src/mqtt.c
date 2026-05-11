@@ -671,7 +671,7 @@ struct ist mqtt_field_value(struct ist msg, int type, int fieldname_id)
 		case MQTT_FN_SHARED_SUBSCRIPTION_AVAILABLE:
 			if (mpkt.data.connack.var_hdr.protocol_version != MQTT_VERSION_5_0)
 				goto not_found_or_invalid;
-			if (!mqtt_uint2str(trash, mpkt.data.connack.var_hdr.props.shared_subsription_available))
+			if (!mqtt_uint2str(trash, mpkt.data.connack.var_hdr.props.shared_subscription_available))
 				goto not_found_or_invalid;
 			res = ist2(trash->area, trash->data);
 			goto end;
@@ -1140,9 +1140,9 @@ static int mqtt_parse_connack(struct ist parser, struct mqtt_pkt *mpkt)
 			case MQTT_PROP_SHARED_SUBSRIPTION_AVAILABLE:
 				if (fields & MQTT_FN_BIT_SHARED_SUBSCRIPTION_AVAILABLE)
 					goto end;
-				props = mqtt_read_1byte_int(istnext(props), &mpkt->data.connack.var_hdr.props.shared_subsription_available);
+				props = mqtt_read_1byte_int(istnext(props), &mpkt->data.connack.var_hdr.props.shared_subscription_available);
 				/* can have only 2 values: 0 or 1 */
-				if (mpkt->data.connack.var_hdr.props.shared_subsription_available > 1)
+				if (mpkt->data.connack.var_hdr.props.shared_subscription_available > 1)
 					goto end;
 				fields |= MQTT_FN_BIT_SHARED_SUBSCRIPTION_AVAILABLE;
 				break;
