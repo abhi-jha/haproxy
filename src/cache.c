@@ -1950,7 +1950,10 @@ static int parse_cache_rule(struct proxy *proxy, const char *name, struct act_ru
 	return 1;
 
   err:
-	free(cconf);
+	if (cconf) {
+		free(cconf->c.name);
+		free(cconf);
+	}
 	return 0;
 }
 
