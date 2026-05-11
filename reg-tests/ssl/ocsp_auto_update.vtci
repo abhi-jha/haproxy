@@ -407,7 +407,7 @@ haproxy h5 -cli {
 shell {
     ocsp_resp_file="${tmpdir}.ocsp_resp.der"
 
-   echo "show ssl ocsp-response base64 303b300906052b0e03021a050004148a83e0060faff709ca7e9b95522a2e81635fda0a0414f652b0e435d5ea923851508f0adbe92d85de007a02021015" | socat "${tmpdir}/h5/stats" - | sed -e 's/.\{72\}/&\n/g' | openssl base64 -d | tee /tmp/with-o64 > $ocsp_resp_file
+   echo "show ssl ocsp-response base64 303b300906052b0e03021a050004148a83e0060faff709ca7e9b95522a2e81635fda0a0414f652b0e435d5ea923851508f0adbe92d85de007a02021015" | socat "${tmpdir}/h5/stats" - | sed -e 's/.\{72\}/&\n/g' | openssl base64 -d | tee "${tmpdir}/with-o64" > $ocsp_resp_file
 
    if [ $? -eq 0 ]
    then
