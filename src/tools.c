@@ -4900,8 +4900,10 @@ char *env_expand(char *in)
 		}
 
 		out = my_realloc2(out, out_len + (txt_end - txt_beg) + val_len + 1);
-		if (!out)
+		if (!out) {
+			free(in);
 			goto leave;
+		}
 
 		if (txt_end > txt_beg) {
 			memcpy(out + out_len, txt_beg, txt_end - txt_beg);
