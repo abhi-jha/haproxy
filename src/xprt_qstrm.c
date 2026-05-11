@@ -1,3 +1,5 @@
+#include <haproxy/xprt_qstrm.h>
+
 #include <haproxy/api.h>
 #include <haproxy/buf.h>
 #include <haproxy/connection.h>
