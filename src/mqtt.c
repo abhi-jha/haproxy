@@ -789,10 +789,10 @@ static int mqtt_parse_connect(struct ist parser, struct mqtt_pkt *mpkt)
 				break;
 
 			case MQTT_PROP_TOPIC_ALIAS_MAXIMUM:
-				if (fields & MQTT_FN_BIT_TOPIC_ALIAS)
+				if (fields & MQTT_FN_BIT_TOPIC_ALIAS_MAXIMUM)
 					goto end;
 				props = mqtt_read_2byte_int(istnext(props), &mpkt->data.connect.var_hdr.props.topic_alias_maximum);
-				fields |= MQTT_FN_BIT_TOPIC_ALIAS;
+				fields |= MQTT_FN_BIT_TOPIC_ALIAS_MAXIMUM;
 				break;
 
 			case MQTT_PROP_REQUEST_RESPONSE_INFORMATION:
