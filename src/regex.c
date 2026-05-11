@@ -304,7 +304,7 @@ struct my_regex *regex_comp(const char *str, int cs, int cap, char **err)
 	struct my_regex *regex = NULL;
 #if defined(USE_PCRE) || defined(USE_PCRE_JIT)
 	int flags = 0;
-	const char *error;
+	const char *error = NULL;
 	int erroffset;
 #elif defined(USE_PCRE2) || defined(USE_PCRE2_JIT)
 	int flags = 0;
