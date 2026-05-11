@@ -42,7 +42,7 @@ haproxy h2 -conf {
         timeout server  "${HAPROXY_TEST_TIMEOUT-5s}"
 
     resolvers systemdns
-        parse-resolv-conf
+        nameserver dns1 127.0.0.1:53
 
     frontend myfrontend
         bind "fd@${my_fe}"
