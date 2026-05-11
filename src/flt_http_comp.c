@@ -172,16 +172,6 @@ comp_prepare_compress_request(struct comp_state *st, struct stream *s, struct ht
 	else
 		goto fail; /* no algo selected: nothing to do */
 
-
-	/* limit compression rate */
-	if (global.comp_rate_lim > 0)
-		if (read_freq_ctr(&global.comp_bps_in) > global.comp_rate_lim)
-			goto fail;
-
-	/* limit cpu usage */
-	if (th_ctx->idle_pct < compress_min_idle)
-		goto fail;
-
 	/* initialize compression */
 	if (st->comp_algo->init(&st->comp_ctx, global.tune.comp_maxlevel) < 0)
 		goto fail;
