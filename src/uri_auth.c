@@ -269,7 +269,7 @@ struct uri_auth *stats_add_auth(struct uri_auth **root, char *user)
 		free(newuser->user);
 		free(newuser);
 	}
-	if (!old_u) {
+	if (u && !old_u) {
 		if (u->userlist) {
 			free(u->userlist->name);
 			free(u->userlist);
