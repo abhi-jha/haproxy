@@ -33,7 +33,7 @@
 #include <haproxy/istbuf.h>
 #include <haproxy/mux_quic.h>
 #include <haproxy/pool.h>
-#include <haproxy/qmux_http.h>
+#include <haproxy/qcm_http.h>
 #include <haproxy/qpack-dec.h>
 #include <haproxy/qpack-enc.h>
 #include <haproxy/quic_conn.h>

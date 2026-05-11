@@ -8,7 +8,7 @@
 #include <haproxy/mux_quic.h>
 #include <haproxy/mux_quic_priv.h>
 #include <haproxy/proxy.h>
-#include <haproxy/qmux_trace.h>
+#include <haproxy/qcm_trace.h>
 #include <haproxy/quic_fctl.h>
 #include <haproxy/quic_frame.h>
 #include <haproxy/trace.h>

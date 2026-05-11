@@ -1,5 +1,5 @@
-#ifndef _HAPROXY_MUX_QUIC_HTTP_H
-#define _HAPROXY_MUX_QUIC_HTTP_H
+#ifndef _HAPROXY_QCM_HTTP_H
+#define _HAPROXY_QCM_HTTP_H
 
 #ifdef USE_QUIC
 
@@ -17,4 +17,4 @@ size_t qcs_http_reset_buf(struct qcs *qcs, struct buffer *buf, size_t count);
 
 #endif /* USE_QUIC */
 
-#endif /* _HAPROXY_MUX_QUIC_HTTP_H */
+#endif /* _HAPROXY_QCM_HTTP_H */

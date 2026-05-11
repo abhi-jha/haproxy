@@ -1,8 +1,8 @@
-#include <haproxy/qmux_http.h>
+#include <haproxy/qcm_http.h>
 
 #include <haproxy/api-t.h>
 #include <haproxy/htx.h>
-#include <haproxy/qmux_trace.h>
+#include <haproxy/qcm_trace.h>
 
 /* QUIC MUX rcv_buf operation using HTX data. Received data from stream <qcs>
  * will be transferred as HTX in <buf>. Output buffer is expected to be of

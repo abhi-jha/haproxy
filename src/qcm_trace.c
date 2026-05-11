@@ -1,4 +1,4 @@
-#include <haproxy/qmux_trace.h>
+#include <haproxy/qcm_trace.h>
 
 #include <import/ist.h>
 #include <haproxy/api.h>

@@ -8,8 +8,8 @@
 #include <haproxy/http.h>
 #include <haproxy/istbuf.h>
 #include <haproxy/mux_quic.h>
-#include <haproxy/qmux_http.h>
-#include <haproxy/qmux_trace.h>
+#include <haproxy/qcm_http.h>
+#include <haproxy/qcm_trace.h>
 #include <haproxy/quic_utils.h>
 #include <haproxy/trace.h>
 

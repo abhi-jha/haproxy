@@ -1,5 +1,5 @@
-#ifndef _HAPROXY_QMUX_TRACE_H
-#define _HAPROXY_QMUX_TRACE_H
+#ifndef _HAPROXY_QCM_TRACE_H
+#define _HAPROXY_QCM_TRACE_H
 
 #ifdef USE_QUIC
 
@@ -77,4 +77,4 @@ void qmux_dump_qcs_info(struct buffer *msg, const struct qcs *qcs);
 
 #endif /* USE_QUIC */
 
-#endif /* _HAPROXY_QMUX_TRACE_H */
+#endif /* _HAPROXY_QCM_TRACE_H */

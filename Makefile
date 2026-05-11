@@ -667,7 +667,7 @@ OPTIONS_OBJS += src/mux_quic.o src/h3.o src/quic_rx.o src/quic_tx.o	\
                 src/quic_cc_bbr.o src/quic_retry.o			\
                 src/cfgparse-quic.o src/xprt_quic.o src/quic_token.o	\
                 src/quic_ack.o src/qpack-dec.o src/quic_cc_newreno.o	\
-                src/qmux_http.o src/qmux_trace.o src/quic_rules.o	\
+                src/qcm_http.o src/qcm_trace.o src/quic_rules.o		\
                 src/quic_cc_nocc.o src/quic_cc.o src/quic_pacing.o	\
                 src/h3_stats.o src/quic_stats.o src/qpack-enc.o		\
                 src/qpack-tbl.o src/quic_cc_drs.o src/quic_fctl.o	\

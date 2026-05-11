@@ -15,8 +15,8 @@
 #include <haproxy/ncbuf.h>
 #include <haproxy/pool.h>
 #include <haproxy/proxy.h>
-#include <haproxy/qmux_http.h>
-#include <haproxy/qmux_trace.h>
+#include <haproxy/qcm_http.h>
+#include <haproxy/qcm_trace.h>
 #include <haproxy/quic_conn.h>
 #include <haproxy/quic_enc.h>
 #include <haproxy/quic_fctl.h>
