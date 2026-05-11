@@ -7340,7 +7340,7 @@ static size_t h2s_make_data(struct h2s *h2s, struct buffer *buf, size_t count)
 			h2s->flags |= H2_SF_BLK_MBUSY;
 		}
 		else {
-			TRACE_ERROR("Request DATA frame for aborted tunnel", H2_EV_RX_FRAME|H2_EV_RX_DATA, h2c->conn, h2s);
+			TRACE_ERROR("Request DATA frame for aborted tunnel", H2_EV_TX_FRAME|H2_EV_TX_DATA, h2c->conn, h2s);
 			h2s_error(h2s, H2_ERR_CANCEL);
 		}
 		goto end;
@@ -8499,7 +8499,8 @@ static int h2_dump_h2s_info(struct buffer *msg, const struct h2s *h2s, const cha
 			      h2s_sc(h2s)->flags, h2s_sc(h2s)->app);
 
 	chunk_appendf(msg, " .sd=%p", h2s->sd);
-	chunk_appendf(msg, "(.flg=0x%08x .evts=%s)", se_fl_get(h2s->sd), tevt_evts2str(h2s->sd->term_evts_log));
+	if (h2s->sd)
+		chunk_appendf(msg, "(.flg=0x%08x .evts=%s)", se_fl_get(h2s->sd), tevt_evts2str(h2s->sd->term_evts_log));
 
 	if (pfx)
 		chunk_appendf(msg, "\n%s", pfx);
@@ -8507,7 +8508,7 @@ static int h2_dump_h2s_info(struct buffer *msg, const struct h2s *h2s, const cha
 	chunk_appendf(msg, " .subs=%p", h2s->subs);
 	if (h2s->subs) {
 		chunk_appendf(msg, "(ev=%d tl=%p", h2s->subs->events, h2s->subs->tasklet);
-		chunk_appendf(msg, " tl.calls=%d tl.ctx=%p tl.fct=",
+		chunk_appendf(msg, " tl.calls=%u tl.ctx=%p tl.fct=",
 			      h2s->subs->tasklet->calls,
 			      h2s->subs->tasklet->context);
 		if (h2s->subs->tasklet->calls >= 1000000)
