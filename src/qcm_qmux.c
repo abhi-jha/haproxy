@@ -1,4 +1,4 @@
-#include <haproxy/mux_quic_qstrm.h>
+#include <haproxy/qcm_qmux.h>
 
 #include <haproxy/api.h>
 #include <haproxy/buf.h>

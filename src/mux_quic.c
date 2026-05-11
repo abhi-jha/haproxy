@@ -11,11 +11,11 @@
 #include <haproxy/global-t.h>
 #include <haproxy/h3.h>
 #include <haproxy/list.h>
-#include <haproxy/mux_quic_qstrm.h>
 #include <haproxy/ncbuf.h>
 #include <haproxy/pool.h>
 #include <haproxy/proxy.h>
 #include <haproxy/qcm_http.h>
+#include <haproxy/qcm_qmux.h>
 #include <haproxy/qcm_trace.h>
 #include <haproxy/quic_conn.h>
 #include <haproxy/quic_enc.h>
@@ -34,7 +34,7 @@
 #include <haproxy/stconn.h>
 #include <haproxy/time.h>
 #include <haproxy/trace.h>
-#include <haproxy/xprt_qstrm.h>
+#include <haproxy/xprt_qmux.h>
 #include <haproxy/xref.h>
 
 DECLARE_TYPED_POOL(pool_head_qcc, "qcc", struct qcc);

@@ -671,7 +671,7 @@ OPTIONS_OBJS += src/mux_quic.o src/h3.o src/quic_rx.o src/quic_tx.o	\
                 src/quic_cc_nocc.o src/quic_cc.o src/quic_pacing.o	\
                 src/h3_stats.o src/quic_stats.o src/qpack-enc.o		\
                 src/qpack-tbl.o src/quic_cc_drs.o src/quic_fctl.o	\
-                src/quic_enc.o src/mux_quic_qstrm.o src/xprt_qstrm.o	\
+                src/quic_enc.o src/qcm_qmux.o src/xprt_qmux.o		\
                 src/mpring.o
 endif
 

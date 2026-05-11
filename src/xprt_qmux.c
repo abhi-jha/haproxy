@@ -1,4 +1,4 @@
-#include <haproxy/xprt_qstrm.h>
+#include <haproxy/xprt_qmux.h>
 
 #include <haproxy/api.h>
 #include <haproxy/buf.h>
@@ -7,8 +7,8 @@
 #include <haproxy/fd.h>
 #include <haproxy/global.h>
 #include <haproxy/mux_quic.h>
-#include <haproxy/mux_quic_qstrm.h>
 #include <haproxy/pool.h>
+#include <haproxy/qcm_qmux.h>
 #include <haproxy/quic_frame.h>
 #include <haproxy/quic_tp-t.h>
 
