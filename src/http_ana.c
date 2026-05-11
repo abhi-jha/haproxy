@@ -2528,7 +2528,7 @@ int http_apply_redirect_rule(struct redirect_rule *rule, struct stream *s, struc
 				size_t len = build_logline(s, chunk->area + chunk->data,
 				                           chunk->size - chunk->data,
 				                           &rule->rdr_fmt);
-				if (!len && rule->flags & REDIRECT_FLAG_IGNORE_EMPTY) {
+				if (!len && (rule->flags & REDIRECT_FLAG_IGNORE_EMPTY)) {
 					ret = 2;
 					goto out;
 				}
@@ -2879,7 +2879,7 @@ static enum rule_result http_req_get_intercept_rule(struct proxy *px, struct lis
 
 		/* Always call the action function if defined */
 		if (rule->action_ptr) {
-			if (!(s->scf->flags & SC_FL_ERROR) & !(s->req.flags & (CF_READ_TIMEOUT|CF_WRITE_TIMEOUT))) {
+			if (!(s->scf->flags & SC_FL_ERROR) && !(s->req.flags & (CF_READ_TIMEOUT|CF_WRITE_TIMEOUT))) {
 				s->waiting_entity.type = STRM_ENTITY_NONE;
 				s->waiting_entity.ptr  = NULL;
 			}
@@ -3071,7 +3071,7 @@ resume_execution:
 
 		/* Always call the action function if defined */
 		if (rule->action_ptr) {
-			if (!(s->scb->flags & SC_FL_ERROR) & !(s->res.flags & (CF_READ_TIMEOUT|CF_WRITE_TIMEOUT))) {
+			if (!(s->scb->flags & SC_FL_ERROR) && !(s->res.flags & (CF_READ_TIMEOUT|CF_WRITE_TIMEOUT))) {
 				s->waiting_entity.type = STRM_ENTITY_NONE;
 				s->waiting_entity.ptr  = NULL;
 			}
