@@ -215,8 +215,8 @@ struct uri_auth *stats_set_flag(struct uri_auth **root, int flag)
  */
 struct uri_auth *stats_add_auth(struct uri_auth **root, char *user)
 {
-	struct uri_auth *u;
-	struct auth_users *newuser;
+	struct uri_auth *u, *old_u;
+	struct auth_users *newuser = NULL;
 	char *pass;
 
 	pass = strchr(user, ':');
@@ -225,20 +225,21 @@ struct uri_auth *stats_add_auth(struct uri_auth **root, char *user)
 	else
 		pass = "";
 
+	old_u = root ? *root : NULL;
 	if ((u = stats_check_init_uri_auth(root)) == NULL)
-		return NULL;
+		goto fail;
 
 	if (!u->userlist)
 		u->userlist = calloc(1, sizeof(*u->userlist));
 
 	if (!u->userlist)
-		return NULL;
+		goto fail;
 
 	if (!u->userlist->name)
 		u->userlist->name = strdup(".internal-stats-userlist");
 
 	if (!u->userlist->name)
-		return NULL;
+		goto fail;
 
 	for (newuser = u->userlist->users; newuser; newuser = newuser->next)
 		if (strcmp(newuser->user, user) == 0) {
@@ -249,26 +250,34 @@ struct uri_auth *stats_add_auth(struct uri_auth **root, char *user)
 
 	newuser = calloc(1, sizeof(*newuser));
 	if (!newuser)
-		return NULL;
+		goto fail;
 
 	newuser->user = strdup(user);
-	if (!newuser->user) {
-		free(newuser);
-		return NULL;
-	}
+	if (!newuser->user)
+		goto fail;
 
 	newuser->pass = strdup(pass);
-	if (!newuser->pass) {
-		free(newuser->user);
-		free(newuser);
-		return NULL;
-	}
+	if (!newuser->pass)
+		goto fail;
 
 	newuser->flags |= AU_O_INSECURE;
 	newuser->next = u->userlist->users;
 	u->userlist->users = newuser;
-
 	return u;
+ fail:
+	if (newuser) {
+		free(newuser->user);
+		free(newuser);
+	}
+	if (!old_u) {
+		if (u->userlist) {
+			free(u->userlist->name);
+			free(u->userlist);
+		}
+		free(u);
+		*root = NULL;
+	}
+	return NULL;
 }
 
 /*
@@ -278,10 +287,11 @@ struct uri_auth *stats_add_auth(struct uri_auth **root, char *user)
  */
 struct uri_auth *stats_add_scope(struct uri_auth **root, char *scope)
 {
-	struct uri_auth *u;
+	struct uri_auth *u, *old_u;
 	char *new_name;
 	struct stat_scope *old_scope, **scope_list;
 
+	old_u = root ? *root : NULL;
 	if ((u = stats_check_init_uri_auth(root)) == NULL)
 		goto out;
 
@@ -308,7 +318,10 @@ struct uri_auth *stats_add_scope(struct uri_auth **root, char *scope)
  out_name:
 	free(new_name);
  out_u:
-	free(u);
+	if (!old_u) {
+		free(u);
+		*root = NULL;
+	}
  out:
 	return NULL;
 }
