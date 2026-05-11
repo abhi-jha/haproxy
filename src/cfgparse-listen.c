@@ -3262,12 +3262,14 @@ stats_error_parsing:
 					/* prepare error message just in case */
 					rc = kwl->kw[index].parse(args, CFG_LISTEN, curproxy, curr_defproxy, file, linenum, &errmsg);
 					if (rc < 0) {
-						ha_alert("parsing [%s:%d] : %s\n", file, linenum, errmsg);
+						if (errmsg)
+							ha_alert("parsing [%s:%d] : %s\n", file, linenum, errmsg);
 						err_code |= ERR_ALERT | ERR_FATAL;
 						goto out;
 					}
 					else if (rc > 0) {
-						ha_warning("parsing [%s:%d] : %s\n", file, linenum, errmsg);
+						if (errmsg)
+							ha_warning("parsing [%s:%d] : %s\n", file, linenum, errmsg);
 						err_code |= ERR_WARN;
 						goto out;
 					}
