@@ -816,12 +816,6 @@ static inline size_t channel_input_data(const struct channel *chn)
 	return channel_data(chn) - co_data(chn);
 }
 
-/* Returns 1 if the channel is empty, taking the HTX streams into account */
-static inline size_t channel_empty(const struct channel *chn)
-{
-	return (IS_HTX_STRM(chn) ? htx_is_empty(htxbuf(&chn->buf)) : c_empty(chn));
-}
-
 /* Check channel's last_read date against the idle timeer to verify the producer
  * is still streaming data or not
  */
