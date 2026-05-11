@@ -19,7 +19,7 @@ uint8_t mqtt_cpt_flags[MQTT_CPT_ENTRIES] = {
 	[MQTT_CPT_CONNACK]     = 0x00,
 
 	/* MQTT_CPT_PUBLISH flags can have different values (DUP, QoS, RETAIN), must be
-	 * check more carefully
+	 * check more carefully (any combination of the 4 bits is valid).
 	 */
 	[MQTT_CPT_PUBLISH]     = 0x0F,
 
@@ -162,7 +162,8 @@ static inline struct ist mqtt_read_fixed_hdr(struct ist parser, struct mqtt_pkt 
 	uint8_t ptype = (type & 0xF0) >> 4;
 	uint8_t flags = type & 0x0F;
 
-	if (ptype == MQTT_CPT_INVALID || ptype >= MQTT_CPT_ENTRIES || flags != mqtt_cpt_flags[ptype])
+	if (ptype == MQTT_CPT_INVALID || ptype >= MQTT_CPT_ENTRIES ||
+	    (ptype != MQTT_CPT_PUBLISH && flags != mqtt_cpt_flags[ptype]))
 		return IST_NULL;
 
 	pkt->fixed_hdr.type = ptype;
