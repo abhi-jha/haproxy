@@ -190,7 +190,7 @@ static int cfg_eval_cond_enabled(const char *str)
 	else if (strcmp(str, "EPOLL") == 0)
 		return !!(global.tune.options & GTUNE_USE_EPOLL);
 	else if (strcmp(str, "KQUEUE") == 0)
-		return !!(global.tune.options & GTUNE_USE_EPOLL);
+		return !!(global.tune.options & GTUNE_USE_KQUEUE);
 	else if (strcmp(str, "EVPORTS") == 0)
 		return !!(global.tune.options & GTUNE_USE_EVPORTS);
 	else if (strcmp(str, "SPLICE") == 0)
