@@ -301,7 +301,7 @@ int http_add_header(struct htx *htx, const struct ist n, const struct ist v, int
 	 * it just before the end-of-header block. So blocks remains ordered. */
 	for (prev = htx_get_prev(htx, htx->tail); prev != htx->first; prev = htx_get_prev(htx, prev)) {
 		struct htx_blk   *pblk = htx_get_blk(htx, prev);
-		enum htx_blk_type type = htx_get_blk_type(pblk);
+		enum htx_blk_type ptype = htx_get_blk_type(pblk);
 
 		/* Swap .addr and .info fields */
 		blk->addr ^= pblk->addr; pblk->addr ^= blk->addr; blk->addr ^= pblk->addr;
@@ -311,7 +311,7 @@ int http_add_header(struct htx *htx, const struct ist n, const struct ist v, int
 			blk->addr += htx_get_blksz(pblk);
 
 		/* Stop when end-of-header is reached */
-		if (type == HTX_BLK_EOH)
+		if (ptype == HTX_BLK_EOH)
 			break;
 
 		blk = pblk;
