@@ -1801,8 +1801,6 @@ static void http_cache_io_handler(struct appctx *appctx)
 		goto exit;
 	}
 
-	res_htx = htx_from_buf(&appctx->outbuf);
-
 	len = first->len - sizeof(*cache_ptr) - ctx->sent;
 	res_htx = htx_from_buf(&appctx->outbuf);
 
