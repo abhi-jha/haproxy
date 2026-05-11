@@ -3868,7 +3868,7 @@ static int qcm_init(struct connection *conn, struct proxy *prx,
 		qcc->rfctl.msd_uni_l = rparams->initial_max_stream_data_uni;
 	}
 	else {
-		rparams = xprt_qstrm_rparams(conn->xprt_ctx);
+		rparams = xprt_qmux_rparams(conn->xprt_ctx);
 		qfctl_init(&qcc->tx.fc, rparams->initial_max_data);
 
 		qcc->rfctl.ms_uni = rparams->initial_max_streams_uni;
@@ -3877,7 +3877,7 @@ static int qcm_init(struct connection *conn, struct proxy *prx,
 		qcc->rfctl.msd_bidi_r = rparams->initial_max_stream_data_bidi_remote;
 		qcc->rfctl.msd_uni_l = rparams->initial_max_stream_data_uni;
 
-		lparams = xprt_qstrm_lparams(conn->xprt_ctx);
+		lparams = xprt_qmux_lparams(conn->xprt_ctx);
 		qcc->lfctl.ms_bidi = qcc->lfctl.ms_bidi_init = lparams->initial_max_streams_bidi;
 		qcc->lfctl.ms_uni = lparams->initial_max_streams_uni;
 		qcc->lfctl.msd_bidi_l = lparams->initial_max_stream_data_bidi_local;
@@ -3912,7 +3912,7 @@ static int qcm_init(struct connection *conn, struct proxy *prx,
 		qcc->rx.qmux_buf = BUF_NULL;
 
 		/* Rx buffer is transferred from xprt layer - necessary if too many data were read */
-		qcc->rx.rlen = xprt_qstrm_xfer_rxbuf(conn->xprt_ctx, &qcc->rx.qmux_buf);
+		qcc->rx.rlen = xprt_qmux_xfer_rxbuf(conn->xprt_ctx, &qcc->rx.qmux_buf);
 		/* Cannot have a non empty record with an empty buffer. */
 		BUG_ON(qcc->rx.rlen && !b_data(&qcc->rx.qmux_buf));
 	}
