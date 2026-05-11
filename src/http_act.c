@@ -656,7 +656,7 @@ static enum act_return action_http_set_status(struct act_rule *rule, struct prox
 		if (s->sv_tgcounters)
 			_HA_ATOMIC_INC(&s->sv_tgcounters->failed_rewrites);
 
-		if (!(s->txn.http->req.flags & HTTP_MSGF_SOFT_RW)) {
+		if (!(s->txn.http->rsp.flags & HTTP_MSGF_SOFT_RW)) {
 			if (!(s->flags & SF_ERR_MASK))
 				s->flags |= SF_ERR_PRXCOND;
 			return ACT_RET_ERR;
