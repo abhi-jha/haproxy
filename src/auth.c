@@ -129,7 +129,7 @@ int userlist_postinit()
 	for (curuserlist = userlist; curuserlist; curuserlist = curuserlist->next) {
 		struct auth_groups *ag;
 		struct auth_users *curuser;
-		struct auth_groups_list *grl;
+		struct auth_groups_list *grl, *tmp;
 
 		for (curuser = curuserlist->users; curuser; curuser = curuser->next) {
 			char *group = NULL;
@@ -152,7 +152,7 @@ int userlist_postinit()
 						groups = groups->next;
 						free(grl);
 					}
-					return ERR_ALERT | ERR_FATAL;
+					goto free_groups;
 				}
 
 				/* Add this group at the group userlist. */
@@ -165,7 +165,7 @@ int userlist_postinit()
 						groups = groups->next;
 						free(grl);
 					}
-					return ERR_ALERT | ERR_FATAL;
+					goto free_groups;
 				}
 
 				grl->group = ag;
@@ -192,7 +192,7 @@ int userlist_postinit()
 				if (!curuser) {
 					ha_alert("userlist '%s': no such user '%s' specified in group '%s'\n",
 						 curuserlist->name, user, ag->name);
-					return ERR_ALERT | ERR_FATAL;
+					goto free_groups;
 				}
 
 				/* Add this group at the group userlist. */
@@ -200,7 +200,7 @@ int userlist_postinit()
 				if (!grl) {
 					ha_alert("userlist '%s': no more memory when trying to allocate the user groups.\n",
 						 curuserlist->name);
-					return  ERR_ALERT | ERR_FATAL;
+					goto free_groups;
 				}
 
 				grl->group = ag;
@@ -211,6 +211,22 @@ int userlist_postinit()
 			ha_free(&ag->groupusers);
 		}
 
+		goto next_userlist;
+
+	 free_groups:
+		/* Free already-assigned groups for all users in this userlist. */
+		for (curuser = curuserlist->users; curuser; curuser = curuser->next) {
+			grl = curuser->u.groups;
+			while (grl) {
+				tmp = grl;
+				grl = grl->next;
+				free(tmp);
+			}
+			curuser->u.groups = NULL;
+		}
+		return ERR_ALERT | ERR_FATAL;
+
+	next_userlist:;
 #ifdef DEBUG_AUTH
 		for (ag = curuserlist->groups; ag; ag = ag->next) {
 			struct auth_groups_list *agl;
