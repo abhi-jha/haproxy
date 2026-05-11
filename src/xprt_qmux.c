@@ -121,7 +121,7 @@ int conn_recv_qstrm(struct connection *conn, struct xprt_qstrm_ctx *ctx, int fla
 	return 0;
 
  fail:
-	conn->err_code = CO_ER_QSTRM;
+	conn->err_code = CO_ER_QMUX;
 	conn->flags |= CO_FL_ERROR;
 	return 0;
 }
@@ -174,7 +174,7 @@ int conn_send_qstrm(struct connection *conn, struct xprt_qstrm_ctx *ctx, int fla
 	return 0;
 
  fail:
-	conn->err_code = CO_ER_QSTRM;
+	conn->err_code = CO_ER_QMUX;
 	conn->flags |= CO_FL_ERROR;
 	return 0;
 }
@@ -185,8 +185,8 @@ struct task *xprt_qstrm_io_cb(struct task *t, void *context, unsigned int state)
 	struct connection *conn = ctx->conn;
 	int free = 0, ret;
 
-	if (conn->flags & CO_FL_QSTRM_SEND) {
-		if (!conn_send_qstrm(conn, ctx, CO_FL_QSTRM_SEND)) {
+	if (conn->flags & CO_FL_QMUX_SEND) {
+		if (!conn_send_qstrm(conn, ctx, CO_FL_QMUX_SEND)) {
 			if (!(conn->flags & CO_FL_ERROR)) {
 				ctx->ops_lower->subscribe(conn, ctx->ctx_lower,
 				                          SUB_RETRY_SEND, &ctx->wait_event);
@@ -195,8 +195,8 @@ struct task *xprt_qstrm_io_cb(struct task *t, void *context, unsigned int state)
 		}
 	}
 
-	if (conn->flags & CO_FL_QSTRM_RECV) {
-		if (!conn_recv_qstrm(conn, ctx, CO_FL_QSTRM_RECV)) {
+	if (conn->flags & CO_FL_QMUX_RECV) {
+		if (!conn_recv_qstrm(conn, ctx, CO_FL_QMUX_RECV)) {
 			if (!(conn->flags & CO_FL_ERROR)) {
 				ctx->ops_lower->subscribe(conn, ctx->ctx_lower,
 				                          SUB_RETRY_RECV, &ctx->wait_event);
@@ -207,7 +207,7 @@ struct task *xprt_qstrm_io_cb(struct task *t, void *context, unsigned int state)
 
  out:
 	if ((conn->flags & CO_FL_ERROR) ||
-	    !(conn->flags & (CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND))) {
+	    !(conn->flags & (CO_FL_QMUX_RECV|CO_FL_QMUX_SEND))) {
 		/* XPRT should be unsubscribed when transfer done or on error. */
 		BUG_ON(ctx->wait_event.events);
 
@@ -327,7 +327,7 @@ static void xprt_qstrm_close(struct connection *conn, void *xprt_ctx)
 	if (ctx->ops_lower && ctx->ops_lower->close)
 		ctx->ops_lower->close(conn, ctx->ctx_lower);
 
-	conn->flags &= ~(CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND);
+	conn->flags &= ~(CO_FL_QMUX_RECV|CO_FL_QMUX_SEND);
 
 	BUG_ON(conn->xprt_ctx != ctx);
 	conn->xprt_ctx = ctx->ctx_lower;
@@ -344,17 +344,17 @@ static int xprt_qstrm_get_alpn(const struct connection *conn, void *xprt_ctx,
 	return ctx->ops_lower->get_alpn(conn, ctx->ctx_lower, str, len);
 }
 
-struct xprt_ops xprt_qstrm = {
+struct xprt_ops xprt_qmux = {
 	.add_xprt  = xprt_qstrm_add_xprt,
 	.init      = xprt_qstrm_init,
 	.start     = xprt_qstrm_start,
 	.close     = xprt_qstrm_close,
 	.get_alpn  = xprt_qstrm_get_alpn,
-	.name      = "qstrm",
+	.name      = "qmux",
 };
 
 static void __xprt_qstrm_init(void)
 {
-	xprt_register(XPRT_QSTRM, &xprt_qstrm);
+	xprt_register(XPRT_QMUX, &xprt_qmux);
 }
 INITCALL0(STG_REGISTER, __xprt_qstrm_init);

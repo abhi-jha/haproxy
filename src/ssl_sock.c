@@ -6965,8 +6965,8 @@ struct task *ssl_sock_io_cb(struct task *t, void *context, unsigned int state)
 			int closed_connection = 0;
 
 			if (!ctx->conn->mux) {
-				if (ctx->conn->flags & (CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND)) {
-					const struct xprt_ops *ops = xprt_get(XPRT_QSTRM);
+				if (ctx->conn->flags & (CO_FL_QMUX_RECV|CO_FL_QMUX_SEND)) {
+					const struct xprt_ops *ops = xprt_get(XPRT_QMUX);
 					void *xprt_ctx_hs = NULL;
 
 					ret = ops->init(conn, &xprt_ctx_hs);

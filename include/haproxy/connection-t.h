@@ -130,8 +130,8 @@ enum {
 
 	CO_FL_OPT_TOS       = 0x00000020,  /* connection has a special sockopt tos */
 
-	CO_FL_QSTRM_SEND    = 0x00000040,  /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
-	CO_FL_QSTRM_RECV    = 0x00000080,  /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
+	CO_FL_QMUX_SEND    = 0x00000040,   /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
+	CO_FL_QMUX_RECV    = 0x00000080,   /* connection uses QMux protocol, needs to exchange transport parameters before starting mux layer */
 
 	/* These flags indicate whether the Control and Transport layers are initialized */
 	CO_FL_CTRL_READY    = 0x00000100, /* FD was registered, fd_delete() needed */
@@ -213,7 +213,7 @@ static forceinline char *conn_show_flags(char *buf, size_t len, const char *deli
 	/* flags */
 	_(CO_FL_SAFE_LIST, _(CO_FL_IDLE_LIST, _(CO_FL_CTRL_READY,
 	_(CO_FL_REVERSED, _(CO_FL_ACT_REVERSING, _(CO_FL_OPT_MARK, _(CO_FL_OPT_TOS,
-	_(CO_FL_QSTRM_SEND, _(CO_FL_QSTRM_RECV,
+	_(CO_FL_QMUX_SEND, _(CO_FL_QMUX_RECV,
 	_(CO_FL_XPRT_READY, _(CO_FL_WANT_DRAIN, _(CO_FL_WAIT_ROOM, _(CO_FL_SSL_NO_CACHED_INFO, _(CO_FL_EARLY_SSL_HS,
 	_(CO_FL_EARLY_DATA, _(CO_FL_SOCKS4_SEND, _(CO_FL_SOCKS4_RECV, _(CO_FL_SOCK_RD_SH,
 	_(CO_FL_SOCK_WR_SH, _(CO_FL_ERROR, _(CO_FL_FDLESS, _(CO_FL_WAIT_L4_CONN,
@@ -285,7 +285,7 @@ enum {
 
 	CO_ER_SSL_FATAL,         /* SSL fatal error during a SSL_read or SSL_write */
 
-	CO_ER_QSTRM,             /* QMux transport parameter exchange failure */
+	CO_ER_QMUX,              /* QMux transport parameter exchange failure */
 
 	CO_ER_REVERSE,           /* Error during reverse connect */
 
@@ -349,7 +349,7 @@ enum {
 	XPRT_SSL = 1,
 	XPRT_HANDSHAKE = 2,
 	XPRT_QUIC = 3,
-	XPRT_QSTRM = 4,
+	XPRT_QMUX = 4,
 	XPRT_ENTRIES /* must be last one */
 };
 

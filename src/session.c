@@ -242,7 +242,7 @@ int session_accept_fd(struct connection *cli_conn)
 			cli_conn->flags |= CO_FL_ACCEPT_CIP;
 
 		if (l->bind_conf->mux_proto && isteq(l->bind_conf->mux_proto->token, ist("qmux")))
-			cli_conn->flags |= (CO_FL_QSTRM_RECV|CO_FL_QSTRM_SEND);
+			cli_conn->flags |= (CO_FL_QMUX_RECV|CO_FL_QMUX_SEND);
 
 		/* Add the handshake pseudo-XPRT */
 		if (cli_conn->flags & (CO_FL_ACCEPT_PROXY | CO_FL_ACCEPT_CIP)) {
@@ -503,7 +503,7 @@ static void session_kill_embryonic(struct session *sess, unsigned int state)
 		    conn->err_code == CO_ER_PRX_EMPTY || conn->err_code == CO_ER_PRX_ABORT ||
 		    conn->err_code == CO_ER_CIP_EMPTY || conn->err_code == CO_ER_CIP_ABORT ||
 		    conn->err_code == CO_ER_SSL_EMPTY || conn->err_code == CO_ER_SSL_ABORT ||
-		    conn->err_code == CO_ER_QSTRM)
+		    conn->err_code == CO_ER_QMUX)
 			log = 0;
 	}
 
@@ -515,8 +515,8 @@ static void session_kill_embryonic(struct session *sess, unsigned int state)
 				conn->err_code = CO_ER_CIP_TIMEOUT;
 			else if (conn->flags & CO_FL_SSL_WAIT_HS)
 				conn->err_code = CO_ER_SSL_TIMEOUT;
-			else if (conn->flags & CO_FL_QSTRM_RECV)
-				conn->err_code = CO_ER_QSTRM;
+			else if (conn->flags & CO_FL_QMUX_RECV)
+				conn->err_code = CO_ER_QMUX;
 		}
 
 		sess_log_embryonic(sess);
