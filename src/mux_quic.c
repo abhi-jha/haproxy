@@ -3296,7 +3296,7 @@ static int qcc_io_recv(struct qcc *qcc)
  * Returns the value which is a positive integer or 0 if no new stream
  * currently available.
  */
-static int qmux_avail_streams(struct connection *conn)
+static int qcm_avail_streams(struct connection *conn)
 {
 	const struct server *srv = __objt_server(conn->target);
 	struct qcc *qcc = conn->ctx;
@@ -3322,7 +3322,7 @@ static int qmux_avail_streams(struct connection *conn)
 /* Returns the number of streams currently attached into <conn> connection.
  * Used to determine if a connection can be considered as idle or not.
  */
-static int qmux_used_streams(struct connection *conn)
+static int qcm_used_streams(struct connection *conn)
 {
 	struct qcc *qcc = conn->ctx;
 	return qcc->nb_sc;
@@ -3821,8 +3821,8 @@ static void _qcc_init(struct qcc *qcc)
 	LIST_INIT(&qcc->tx.frms);
 }
 
-static int qmux_init(struct connection *conn, struct proxy *prx,
-                     struct session *sess, struct buffer *input)
+static int qcm_init(struct connection *conn, struct proxy *prx,
+                    struct session *sess, struct buffer *input)
 {
 	struct qcc *qcc;
 	const struct quic_transport_params *lparams, *rparams;
@@ -4079,7 +4079,7 @@ static int qmux_init(struct connection *conn, struct proxy *prx,
 	return -1;
 }
 
-static void qmux_destroy(void *ctx)
+static void qcm_destroy(void *ctx)
 {
 	struct qcc *qcc = ctx;
 
@@ -4088,7 +4088,7 @@ static void qmux_destroy(void *ctx)
 	TRACE_LEAVE(QMUX_EV_QCC_END);
 }
 
-static int qmux_strm_attach(struct connection *conn, struct sedesc *sd, struct session *sess)
+static int qcm_strm_attach(struct connection *conn, struct sedesc *sd, struct session *sess)
 {
 	struct qcs *qcs;
 	struct qcc *qcc = conn->ctx;
@@ -4096,7 +4096,7 @@ static int qmux_strm_attach(struct connection *conn, struct sedesc *sd, struct s
 	TRACE_ENTER(QMUX_EV_QCS_NEW, conn);
 
 	/* Flow control limit on bidi streams should already have
-	 * been checked by a prior qmux_avail_streams() invocation.
+	 * been checked by a prior qcm_avail_streams() invocation.
 	 */
 	BUG_ON(!qcc_fctl_avail_streams(qcc, 1));
 
@@ -4128,7 +4128,7 @@ static int qmux_strm_attach(struct connection *conn, struct sedesc *sd, struct s
 	return 0;
 }
 
-static void qmux_strm_detach(struct sedesc *sd)
+static void qcm_strm_detach(struct sedesc *sd)
 {
 	struct qcs *qcs = sd->se;
 	struct qcc *qcc = qcs->qcc;
@@ -4220,7 +4220,7 @@ static void qmux_strm_detach(struct sedesc *sd)
 				goto end;
 			}
 			else if (!ceb_intree(&conn->hash_node.node) &&
-			         qmux_avail_streams(conn) &&
+			         qcm_avail_streams(conn) &&
 			         objt_server(conn->target)) {
 				TRACE_DEVEL("mark connection as available for reuse", QMUX_EV_STRM_END, conn);
 				srv_add_to_avail_list(__objt_server(conn->target), conn);
@@ -4249,8 +4249,8 @@ static void qmux_strm_detach(struct sedesc *sd)
 }
 
 /* Called from the upper layer, to receive data */
-static size_t qmux_strm_rcv_buf(struct stconn *sc, struct buffer *buf,
-                                size_t count, int flags)
+static size_t qcm_strm_rcv_buf(struct stconn *sc, struct buffer *buf,
+                               size_t count, int flags)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 	struct qcc *qcc = qcs->qcc;
@@ -4329,8 +4329,8 @@ static size_t qmux_strm_rcv_buf(struct stconn *sc, struct buffer *buf,
 	return ret;
 }
 
-static size_t qmux_strm_snd_buf(struct stconn *sc, struct buffer *buf,
-                                size_t count, int flags)
+static size_t qcm_strm_snd_buf(struct stconn *sc, struct buffer *buf,
+                               size_t count, int flags)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 	const size_t old_data = qcs_prep_bytes(qcs);
@@ -4403,8 +4403,8 @@ static size_t qmux_strm_snd_buf(struct stconn *sc, struct buffer *buf,
 }
 
 
-static size_t qmux_strm_nego_ff(struct stconn *sc, struct buffer *input,
-                                size_t count, unsigned int flags)
+static size_t qcm_strm_nego_ff(struct stconn *sc, struct buffer *input,
+                               size_t count, unsigned int flags)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 	size_t ret = 0;
@@ -4490,7 +4490,7 @@ static size_t qmux_strm_nego_ff(struct stconn *sc, struct buffer *input,
 	return ret;
 }
 
-static size_t qmux_strm_done_ff(struct stconn *sc)
+static size_t qcm_strm_done_ff(struct stconn *sc)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 	struct qcc *qcc = qcs->qcc;
@@ -4533,7 +4533,7 @@ static size_t qmux_strm_done_ff(struct stconn *sc)
 	return data;
 }
 
-static int qmux_strm_resume_ff(struct stconn *sc, unsigned int flags)
+static int qcm_strm_resume_ff(struct stconn *sc, unsigned int flags)
 {
 	return 0;
 }
@@ -4543,8 +4543,8 @@ static int qmux_strm_resume_ff(struct stconn *sc, unsigned int flags)
  * as at least one event is still subscribed. The <event_type> must only be a
  * combination of SUB_RETRY_RECV and SUB_RETRY_SEND. It always returns 0.
  */
-static int qmux_strm_subscribe(struct stconn *sc, int event_type,
-                               struct wait_event *es)
+static int qcm_strm_subscribe(struct stconn *sc, int event_type,
+                              struct wait_event *es)
 {
 	return qcs_subscribe(__sc_mux_strm(sc), event_type, es);
 }
@@ -4553,7 +4553,7 @@ static int qmux_strm_subscribe(struct stconn *sc, int event_type,
  * The <es> pointer is not allowed to differ from the one passed to the
  * subscribe() call. It always returns zero.
  */
-static int qmux_strm_unsubscribe(struct stconn *sc, int event_type, struct wait_event *es)
+static int qcm_strm_unsubscribe(struct stconn *sc, int event_type, struct wait_event *es)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 
@@ -4567,7 +4567,7 @@ static int qmux_strm_unsubscribe(struct stconn *sc, int event_type, struct wait_
 	return 0;
 }
 
-static int qmux_wake(struct connection *conn)
+static int qcm_wake(struct connection *conn)
 {
 	struct qcc *qcc = conn->ctx;
 
@@ -4596,7 +4596,7 @@ static int qmux_wake(struct connection *conn)
 	return 1;
 }
 
-static void qmux_strm_shut(struct stconn *sc, unsigned int mode, struct se_abort_info *reason)
+static void qcm_strm_shut(struct stconn *sc, unsigned int mode, struct se_abort_info *reason)
 {
 	struct qcs *qcs = __sc_mux_strm(sc);
 	struct qcc *qcc = qcs->qcc;
@@ -4622,7 +4622,7 @@ static void qmux_strm_shut(struct stconn *sc, unsigned int mode, struct se_abort
 	TRACE_LEAVE(QMUX_EV_STRM_SHUT, qcc->conn, qcs);
 }
 
-static int qmux_ctl(struct connection *conn, enum mux_ctl_type mux_ctl, void *output)
+static int qcm_ctl(struct connection *conn, enum mux_ctl_type mux_ctl, void *output)
 {
 	struct qcc *qcc = conn->ctx;
 
@@ -4647,7 +4647,7 @@ static int qmux_ctl(struct connection *conn, enum mux_ctl_type mux_ctl, void *ou
 	}
 }
 
-static int qmux_sctl(struct stconn *sc, enum mux_sctl_type mux_sctl, void *output)
+static int qcm_sctl(struct stconn *sc, enum mux_sctl_type mux_sctl, void *output)
 {
 	int ret = 0;
 	const struct qcs *qcs = __sc_mux_strm(sc);
@@ -4697,7 +4697,7 @@ static int qmux_sctl(struct stconn *sc, enum mux_sctl_type mux_sctl, void *outpu
  * line is used. Each field starts with a space so it's safe to print it after
  * existing fields.
  */
-static int qmux_strm_show_sd(struct buffer *msg, struct sedesc *sd, const char *pfx)
+static int qcm_strm_show_sd(struct buffer *msg, struct sedesc *sd, const char *pfx)
 {
 	struct qcs *qcs = sd->se;
 	struct qcc *qcc;
@@ -4719,26 +4719,26 @@ static int qmux_strm_show_sd(struct buffer *msg, struct sedesc *sd, const char *
 }
 
 
-static const struct mux_ops qmux_ops = {
-	.init        = qmux_init,
-	.destroy     = qmux_destroy,
-	.detach      = qmux_strm_detach,
-	.rcv_buf     = qmux_strm_rcv_buf,
-	.snd_buf     = qmux_strm_snd_buf,
-	.nego_fastfwd = qmux_strm_nego_ff,
-	.done_fastfwd = qmux_strm_done_ff,
-	.resume_fastfwd = qmux_strm_resume_ff,
-	.subscribe   = qmux_strm_subscribe,
-	.unsubscribe = qmux_strm_unsubscribe,
-	.wake        = qmux_wake,
-	.avail_streams = qmux_avail_streams,
-	.used_streams = qmux_used_streams,
+static const struct mux_ops quic_ops = {
+	.init        = qcm_init,
+	.destroy     = qcm_destroy,
+	.detach      = qcm_strm_detach,
+	.rcv_buf     = qcm_strm_rcv_buf,
+	.snd_buf     = qcm_strm_snd_buf,
+	.nego_fastfwd = qcm_strm_nego_ff,
+	.done_fastfwd = qcm_strm_done_ff,
+	.resume_fastfwd = qcm_strm_resume_ff,
+	.subscribe   = qcm_strm_subscribe,
+	.unsubscribe = qcm_strm_unsubscribe,
+	.wake        = qcm_wake,
+	.avail_streams = qcm_avail_streams,
+	.used_streams = qcm_used_streams,
 	.takeover    = NULL,  /* QUIC takeover support not implemented yet */
-	.attach      = qmux_strm_attach,
-	.shut        = qmux_strm_shut,
-	.ctl         = qmux_ctl,
-	.sctl        = qmux_sctl,
-	.show_sd     = qmux_strm_show_sd,
+	.attach      = qcm_strm_attach,
+	.shut        = qcm_strm_shut,
+	.ctl         = qcm_ctl,
+	.sctl        = qcm_sctl,
+	.show_sd     = qcm_strm_show_sd,
 	.flags = MX_FL_HTX|MX_FL_NO_UPG|MX_FL_FRAMED,
 	.name = "QUIC",
 };
@@ -4784,30 +4784,30 @@ void qcc_show_quic(struct qcc *qcc)
 }
 
 static struct mux_proto_list mux_proto_quic =
-  { .token = IST("quic"), .mode = PROTO_MODE_HTTP, .side = PROTO_SIDE_BOTH, .mux = &qmux_ops };
+  { .token = IST("quic"), .mode = PROTO_MODE_HTTP, .side = PROTO_SIDE_BOTH, .mux = &quic_ops };
 
 INITCALL1(STG_REGISTER, register_mux_proto, &mux_proto_quic);
 
 static const struct mux_ops qstrm_ops = {
-	.init        = qmux_init,
-	.destroy     = qmux_destroy,
-	.detach      = qmux_strm_detach,
-	.rcv_buf     = qmux_strm_rcv_buf,
-	.snd_buf     = qmux_strm_snd_buf,
-	.nego_fastfwd = qmux_strm_nego_ff,
-	.done_fastfwd = qmux_strm_done_ff,
-	.resume_fastfwd = qmux_strm_resume_ff,
-	.subscribe   = qmux_strm_subscribe,
-	.unsubscribe = qmux_strm_unsubscribe,
-	.wake        = qmux_wake,
-	.avail_streams = qmux_avail_streams,
-	.used_streams = qmux_used_streams,
+	.init        = qcm_init,
+	.destroy     = qcm_destroy,
+	.detach      = qcm_strm_detach,
+	.rcv_buf     = qcm_strm_rcv_buf,
+	.snd_buf     = qcm_strm_snd_buf,
+	.nego_fastfwd = qcm_strm_nego_ff,
+	.done_fastfwd = qcm_strm_done_ff,
+	.resume_fastfwd = qcm_strm_resume_ff,
+	.subscribe   = qcm_strm_subscribe,
+	.unsubscribe = qcm_strm_unsubscribe,
+	.wake        = qcm_wake,
+	.avail_streams = qcm_avail_streams,
+	.used_streams = qcm_used_streams,
 	.takeover    = NULL,  /* QUIC takeover support not implemented yet */
-	.attach      = qmux_strm_attach,
-	.shut        = qmux_strm_shut,
-	.ctl         = qmux_ctl,
-	.sctl        = qmux_sctl,
-	.show_sd     = qmux_strm_show_sd,
+	.attach      = qcm_strm_attach,
+	.shut        = qcm_strm_shut,
+	.ctl         = qcm_ctl,
+	.sctl        = qcm_sctl,
+	.show_sd     = qcm_strm_show_sd,
 	.flags = MX_FL_HTX|MX_FL_NO_UPG|MX_FL_EXPERIMENTAL,
 	.name = "QMUX",
 };
