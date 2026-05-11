@@ -53,7 +53,7 @@ int qcc_recv_max_streams(struct qcc *qcc, uint64_t max, int bidi);
 int qcc_recv_reset_stream(struct qcc *qcc, uint64_t id, uint64_t err, uint64_t final_size);
 int qcc_recv_stop_sending(struct qcc *qcc, uint64_t id, uint64_t err);
 
-static inline int qmux_stream_rx_bufsz(void)
+static inline int qcm_stream_rx_bufsz(void)
 {
 	return global.tune.bufsize - NCB_RESERVED_SZ;
 }

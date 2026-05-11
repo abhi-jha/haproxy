@@ -41,8 +41,8 @@ DECLARE_TYPED_POOL(pool_head_qcc, "qcc", struct qcc);
 DECLARE_TYPED_POOL(pool_head_qcs, "qcs", struct qcs);
 DECLARE_STATIC_TYPED_POOL(pool_head_qc_stream_rxbuf, "qc_stream_rxbuf", struct qc_stream_rxbuf);
 
-static void qmux_ctrl_send(struct qc_stream_desc *, uint64_t data, uint64_t offset);
-static void qmux_ctrl_room(struct qc_stream_desc *, uint64_t room);
+static void qcm_ctrl_send(struct qc_stream_desc *, uint64_t data, uint64_t offset);
+static void qcm_ctrl_room(struct qc_stream_desc *, uint64_t room);
 
 static void qcc_release(struct qcc *qcc);
 static int qcc_app_init(struct qcc *qcc);
@@ -220,8 +220,8 @@ static struct qcs *qcs_new(struct qcc *qcc, uint64_t id, enum qcs_type type)
 				goto err;
 			}
 
-			qc_stream_desc_sub_send(qcs->tx.stream, qmux_ctrl_send);
-			qc_stream_desc_sub_room(qcs->tx.stream, qmux_ctrl_room);
+			qc_stream_desc_sub_send(qcs->tx.stream, qcm_ctrl_send);
+			qc_stream_desc_sub_room(qcs->tx.stream, qcm_ctrl_room);
 		}
 		else {
 			qcs->tx.qstrm_buf = BUF_NULL;
@@ -642,7 +642,7 @@ uint64_t qcs_prep_bytes(const struct qcs *qcs)
 /* Used as a callback for qc_stream_desc layer to notify about emission of a
  * STREAM frame of <data> length starting at <offset>.
  */
-static void qmux_ctrl_send(struct qc_stream_desc *stream, uint64_t data, uint64_t offset)
+static void qcm_ctrl_send(struct qc_stream_desc *stream, uint64_t data, uint64_t offset)
 {
 	struct qcs *qcs = stream->ctx;
 	struct qcc *qcc = qcs->qcc;
@@ -738,7 +738,7 @@ static inline int qcc_bufwnd_full(const struct qcc *qcc)
 	return qcc->tx.buf_in_flight >= qc->path->cwnd;
 }
 
-static void qmux_ctrl_room(struct qc_stream_desc *stream, uint64_t room)
+static void qcm_ctrl_room(struct qc_stream_desc *stream, uint64_t room)
 {
 	/* Context is different for active and released streams. */
 	struct qcc *qcc = !(stream->flags & QC_SD_FL_RELEASE) ?
@@ -1348,15 +1348,15 @@ static void qcs_consume(struct qcs *qcs, uint64_t bytes, struct qc_stream_rxbuf 
 	 * per QCS, the limit is set to half the capacity. Else, the limit is
 	 * set to match bufsize.
 	 */
-	if (qcs->rx.msd - qcs->rx.msd_base < qmux_stream_rx_bufsz() * 2) {
+	if (qcs->rx.msd - qcs->rx.msd_base < qcm_stream_rx_bufsz() * 2) {
 		if ((qcs->rx.offset - qcs->rx.msd_base) * 2 >= qcs->rx.msd - qcs->rx.msd_base)
 			inc = qcs->rx.offset - qcs->rx.msd_base;
 	}
 	else {
 		diff = qcs->rx.offset - qcs->rx.msd_base;
-		while (diff >= qmux_stream_rx_bufsz()) {
-			inc += qmux_stream_rx_bufsz();
-			diff -= qmux_stream_rx_bufsz();
+		while (diff >= qcm_stream_rx_bufsz()) {
+			inc += qcm_stream_rx_bufsz();
+			diff -= qcm_stream_rx_bufsz();
 		}
 	}
 
@@ -1879,7 +1879,7 @@ static struct qc_stream_rxbuf *qcs_get_rxbuf(struct qcs *qcs, uint64_t offset,
 		buf = container_of(node, struct qc_stream_rxbuf, off_node);
 
 	if (!node || offset >= buf->off_end) {
-		const uint64_t aligned_off = offset - (offset % qmux_stream_rx_bufsz());
+		const uint64_t aligned_off = offset - (offset % qcm_stream_rx_bufsz());
 
 		TRACE_DEVEL("allocating a new entry", QMUX_EV_QCS_RECV, qcs->qcc->conn, qcs);
 		buf = pool_alloc(pool_head_qc_stream_rxbuf);
@@ -1890,7 +1890,7 @@ static struct qc_stream_rxbuf *qcs_get_rxbuf(struct qcs *qcs, uint64_t offset,
 
 		buf->ncb = NCBUF_NULL;
 		buf->off_node.key = aligned_off;
-		buf->off_end = aligned_off + qmux_stream_rx_bufsz();
+		buf->off_end = aligned_off + qcm_stream_rx_bufsz();
 		eb64_insert(&qcs->rx.bufs, &buf->off_node);
 		bdata_ctr_binc(&qcs->rx.data);
 	}

@@ -48,7 +48,7 @@ static void quic_dflt_transport_params_cpy(struct quic_transport_params *dst)
  */
 void quic_transport_params_init(struct quic_transport_params *p, int server)
 {
-	const uint64_t stream_rx_bufsz = qmux_stream_rx_bufsz();
+	const uint64_t stream_rx_bufsz = qcm_stream_rx_bufsz();
 	const uint stream_rxbuf = server ?
 	  quic_tune.fe.stream_rxbuf : quic_tune.be.stream_rxbuf;
 	/* On FE side, check if stream.max-total is set and inferior to stream.max-concurrent */
