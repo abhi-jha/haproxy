@@ -536,7 +536,8 @@ static inline int _h1_report_glitch(struct h1c *h1c, int increment)
 		/* at 75% of the threshold, we switch to close mode
 		 * to force clients to periodically reconnect.
 		 */
-		h1c->h1s->flags = (h1c->h1s->flags & ~H1S_F_WANT_MSK) | H1S_F_WANT_CLO;
+		if (h1c->h1s)
+			h1c->h1s->flags = (h1c->h1s->flags & ~H1S_F_WANT_MSK) | H1S_F_WANT_CLO;
 
 		/* at 100% of the threshold and excess of CPU usage we also
 		 * actively kill the connection.
