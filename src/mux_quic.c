@@ -4667,10 +4667,10 @@ static int qcm_sctl(struct stconn *sc, enum mux_sctl_type mux_sctl, void *output
 		buf = get_trash_chunk();
 
 		if (dbg_ctx->arg.debug_flags & MUX_SCTL_DBG_STR_L_MUXS)
-			qmux_dump_qcs_info(buf, qcs);
+			qcm_dump_qcs_info(buf, qcs);
 
 		if (dbg_ctx->arg.debug_flags & MUX_SCTL_DBG_STR_L_MUXC)
-			qmux_dump_qcc_info(buf, qcc);
+			qcm_dump_qcc_info(buf, qcc);
 
 		if (dbg_ctx->arg.debug_flags & MUX_SCTL_DBG_STR_L_CONN) {
 			chunk_appendf(buf, " conn.flg=%#08x conn.err_code=%u conn.evts=%s",

@@ -10,10 +10,10 @@
 struct qcc;
 struct qcs;
 
-extern struct trace_source trace_qmux;
-#define TRACE_SOURCE    &trace_qmux
+extern struct trace_source trace_qcm;
+#define TRACE_SOURCE    &trace_qcm
 
-static const struct trace_event qmux_trace_events[] = {
+static const struct trace_event qcm_trace_events[] = {
 #define           QMUX_EV_QCC_NEW       (1ULL << 0)
 	{ .mask = QMUX_EV_QCC_NEW ,     .name = "qcc_new",     .desc = "new QUIC connection" },
 #define           QMUX_EV_QCC_RECV      (1ULL << 1)
@@ -72,8 +72,8 @@ struct qcs_build_stream_trace_arg {
 	uint64_t offset;
 };
 
-void qmux_dump_qcc_info(struct buffer *msg, const struct qcc *qcc);
-void qmux_dump_qcs_info(struct buffer *msg, const struct qcs *qcs);
+void qcm_dump_qcc_info(struct buffer *msg, const struct qcc *qcc);
+void qcm_dump_qcs_info(struct buffer *msg, const struct qcs *qcs);
 
 #endif /* USE_QUIC */
 

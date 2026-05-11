@@ -11,43 +11,43 @@
 #include <haproxy/stconn.h>
 
 /* trace source and events */
-static void qmux_trace(enum trace_level level, uint64_t mask,
+static void qcm_trace(enum trace_level level, uint64_t mask,
                        const struct trace_source *src,
                        const struct ist where, const struct ist func,
                        const void *a1, const void *a2, const void *a3, const void *a4);
 
-static void qmux_trace_fill_ctx(struct trace_ctx *ctx, const struct trace_source *src,
+static void qcm_trace_fill_ctx(struct trace_ctx *ctx, const struct trace_source *src,
                                 const void *a1, const void *a2, const void *a3, const void *a4);
 
-static const struct name_desc qmux_trace_lockon_args[4] = {
+static const struct name_desc qcm_trace_lockon_args[4] = {
 	/* arg1 */ { /* already used by the connection */ },
 	/* arg2 */ { .name="qcs", .desc="QUIC stream" },
 	/* arg3 */ { },
 	/* arg4 */ { }
 };
 
-static const struct name_desc qmux_trace_decoding[] = {
-#define QMUX_VERB_CLEAN    1
+static const struct name_desc qcm_trace_decoding[] = {
+#define QCM_VERB_CLEAN    1
 	{ .name="clean",    .desc="only user-friendly stuff, generally suitable for level \"user\"" },
-#define QMUX_VERB_MINIMAL  2
+#define QCM_VERB_MINIMAL  2
 	{ .name="minimal",  .desc="report only qcc/qcs state and flags, no real decoding" },
 	{ /* end */ }
 };
 
-struct trace_source trace_qmux = {
+struct trace_source trace_qcm = {
 	.name = IST("qmux"),
 	.desc = "QUIC multiplexer",
 	.arg_def = TRC_ARG1_CONN,  /* TRACE()'s first argument is always a connection */
-	.default_cb = qmux_trace,
-	.fill_ctx = qmux_trace_fill_ctx,
-	.known_events = qmux_trace_events,
-	.lockon_args = qmux_trace_lockon_args,
-	.decoding = qmux_trace_decoding,
+	.default_cb = qcm_trace,
+	.fill_ctx = qcm_trace_fill_ctx,
+	.known_events = qcm_trace_events,
+	.lockon_args = qcm_trace_lockon_args,
+	.decoding = qcm_trace_decoding,
 	.report_events = ~0,  /* report everything by default */
 };
 
 
-static void qmux_trace_frm(const struct quic_frame *frm)
+static void qcm_trace_frm(const struct quic_frame *frm)
 {
 	switch (frm->type) {
 	case QUIC_FT_MAX_STREAMS_BIDI:
@@ -66,10 +66,10 @@ static void qmux_trace_frm(const struct quic_frame *frm)
 }
 
 /* quic-mux trace handler */
-static void qmux_trace(enum trace_level level, uint64_t mask,
-                       const struct trace_source *src,
-                       const struct ist where, const struct ist func,
-                       const void *a1, const void *a2, const void *a3, const void *a4)
+static void qcm_trace(enum trace_level level, uint64_t mask,
+                      const struct trace_source *src,
+                      const struct ist where, const struct ist func,
+                      const void *a1, const void *a2, const void *a3, const void *a4)
 {
 	const struct connection *conn = a1;
 	const struct qcc *qcc   = conn ? conn->ctx : NULL;
@@ -78,11 +78,11 @@ static void qmux_trace(enum trace_level level, uint64_t mask,
 	if (!qcc)
 		return;
 
-	if (src->verbosity > QMUX_VERB_CLEAN) {
-		qmux_dump_qcc_info(&trace_buf, qcc);
+	if (src->verbosity > QCM_VERB_CLEAN) {
+		qcm_dump_qcc_info(&trace_buf, qcc);
 
 		if (qcs)
-			qmux_dump_qcs_info(&trace_buf, qcs);
+			qcm_dump_qcs_info(&trace_buf, qcs);
 
 		if (mask & QMUX_EV_QCC_NQCS) {
 			const uint64_t *id = a3;
@@ -90,7 +90,7 @@ static void qmux_trace(enum trace_level level, uint64_t mask,
 		}
 
 		if (mask & QMUX_EV_SEND_FRM)
-			qmux_trace_frm(a3);
+			qcm_trace_frm(a3);
 
 		if (mask & QMUX_EV_QCS_XFER_DATA) {
 			const struct qcs_xfer_data_trace_arg *arg = a3;
@@ -107,7 +107,7 @@ static void qmux_trace(enum trace_level level, uint64_t mask,
 }
 
 /* This fills the trace_ctx with extra info guessed from the args */
-static void qmux_trace_fill_ctx(struct trace_ctx *ctx, const struct trace_source *src,
+static void qcm_trace_fill_ctx(struct trace_ctx *ctx, const struct trace_source *src,
                                const void *a1, const void *a2, const void *a3, const void *a4)
 {
 	const struct connection *conn = a1;
@@ -142,7 +142,7 @@ static char *qcc_app_st_to_str(const enum qcc_app_st st)
 	}
 }
 
-void qmux_dump_qcc_info(struct buffer *msg, const struct qcc *qcc)
+void qcm_dump_qcc_info(struct buffer *msg, const struct qcc *qcc)
 {
 	const struct quic_conn *qc = conn_is_quic(qcc->conn) ? qcc->conn->handle.qc : NULL;
 
@@ -159,7 +159,7 @@ void qmux_dump_qcc_info(struct buffer *msg, const struct qcc *qcc)
 		chunk_appendf(msg, " bwnd=%llu/%llu", (ullong)qcc->tx.buf_in_flight, (ullong)qc->path->cwnd);
 }
 
-void qmux_dump_qcs_info(struct buffer *msg, const struct qcs *qcs)
+void qcm_dump_qcs_info(struct buffer *msg, const struct qcs *qcs)
 {
 	chunk_appendf(msg, " qcs=%p .id=%llu .st=%s .flg=0x%04x", qcs, (ullong)qcs->id,
 	              qcs_st_to_str(qcs->st), qcs->flags);
