@@ -95,7 +95,7 @@ const uint64_t mqtt_fields_per_packet[MQTT_CPT_ENTRIES] = {
 	                         MQTT_FN_BIT_DELAY_INTERVAL                    | MQTT_FN_BIT_PAYLOAD_FORMAT_INDICATOR           |
 	                         MQTT_FN_BIT_MESSAGE_EXPIRY_INTERVAL           | MQTT_FN_BIT_CONTENT_TYPE                       |
 	                         MQTT_FN_BIT_RESPONSE_TOPIC                    | MQTT_FN_BIT_CORRELATION_DATA                   |
-	                         MQTT_FN_BIT_USER_PROPERTY                     | MQTT_FN_BIT_WILL_TOPIC                         |
+	                         MQTT_FN_BIT_WILL_TOPIC                        |
 	                         MQTT_FN_BIT_WILL_PAYLOAD                      | MQTT_FN_BIT_USERNAME                           |
 	                         MQTT_FN_BIT_PASSWORD,
 
