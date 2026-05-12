@@ -583,10 +583,12 @@
  * for such array declarations. But it's not the case for clang and other
  * compilers.
  */
-#if __has_attribute(nonstring)
-#define __nonstring __attribute__ ((nonstring))
-#else
-#define __nonstring
+#ifndef __nonstring
+#  if __has_attribute(nonstring)
+#    define __nonstring __attribute__ ((nonstring))
+#  else
+#    define __nonstring
+#  endif
 #endif
 
 #endif /* _HAPROXY_COMPILER_H */
