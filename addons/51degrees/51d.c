@@ -550,6 +550,8 @@ static void _51d_process_match(const struct arg *args, struct sample *smp)
 	char valuesBuffer[1024];
 #endif
 
+#if defined(FIFTYONEDEGREES_H_PATTERN_INCLUDED) || defined(FIFTYONEDEGREES_H_TRIE_INCLUDED) || defined(FIFTYONE_DEGREES_HASH_INCLUDED)
+
 	char no_data[] = "NoData";  /* response when no data could be found */
 	struct buffer *temp = get_trash_chunk();
 	int i = 0, found;
@@ -636,6 +638,7 @@ static void _51d_process_match(const struct arg *args, struct sample *smp)
 	smp->data.u.str.area = temp->area;
 	smp->data.u.str.data = temp->data;
 }
+#endif
 
 /* Sets the sample data as a constant string. This ensures that the
  * string will be processed correctly.
