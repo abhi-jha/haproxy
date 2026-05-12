@@ -203,7 +203,7 @@ static int qc_xprt_start(struct connection *conn, void *ctx)
 	qc = conn->handle.qc;
 	TRACE_ENTER(QUIC_EV_CONN_NEW, qc);
 
-	/* This has as side effet to create a SSL_SESSION object attached to
+	/* This has as side effect to create a SSL_SESSION object attached to
 	 * the SSL object.
 	 */
 	if (qc_is_back(qc) && !qc_ssl_do_hanshake(qc, ctx))

@@ -154,7 +154,7 @@ size_t b_getdelim(const struct buffer *buf, size_t offset, size_t count,
 	return ret;
 }
 
-/* Gets one text line out of aa buffer.
+/* Gets one text line out of a buffer.
  * Return values :
  *   >0 : number of bytes read. Includes the \n if present before len or end.
  *   =0 : no '\n' before end found. <str> is left undefined.
@@ -243,7 +243,7 @@ void b_slow_realign(struct buffer *b, char *swap, size_t output)
 /* b_slow_realign_ofs() : this function realigns a possibly wrapping buffer
  * setting its new head at <ofs>. Depending of the <ofs> value, the resulting
  * buffer may also wrap. A temporary swap area at least as large as b->size must
- * be provided in <swap>. It's up to the caller to ensuze <ofs> is not larger
+ * be provided in <swap>. It's up to the caller to ensure <ofs> is not larger
  * than b->size.
  */
 void b_slow_realign_ofs(struct buffer *b, char *swap, size_t ofs)

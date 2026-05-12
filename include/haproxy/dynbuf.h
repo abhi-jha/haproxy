@@ -107,7 +107,7 @@ static inline int b_may_alloc_for_crit(uint crit)
 		return 0;
 
 	/* If the emergency buffers are too low, we won't try to allocate a
-	 * buffer either so that we speed up their release. As a corrolary, it
+	 * buffer either so that we speed up their release. As a corollary, it
 	 * means that we're always allowed to try to fall back to an emergency
 	 * buffer if pool_alloc() fails. The minimum number of available
 	 * emergency buffers for an allocation depends on the queue:
@@ -138,7 +138,7 @@ static inline char *__b_get_emergency_buf(void)
 /* Ensures that <buf> is allocated, or allocates it. If no memory is available,
  * ((char *)1) is assigned instead with a zero size. The allocated buffer is
  * returned, or NULL in case no memory is available. Since buffers only contain
- * user data, poisonning is always disabled as it brings no benefit and impacts
+ * user data, poisoning is always disabled as it brings no benefit and impacts
  * performance. Due to the difficult buffer_wait management, they are not
  * subject to forced allocation failures either. If other waiters are present
  * at higher criticality levels, we refrain from allocating.
