@@ -1,6 +1,70 @@
 ChangeLog :
 ===========
 
+2026/05/13 : 3.4-dev12
+    - SCRIPTS: announce-release: add a link to the OpenTelemetry filter
+    - BUG/MEDIUM: servers: Only requeue servers if they are up
+    - MINOR: tinfo: store the number of committed extra streams in the tgroup
+    - MINOR: connection: add a function to calculate elastic streams limit
+    - MINOR: mux-h2: consider the elastic streams limit on frontend
+    - MINOR: lb: make LB initialization even more declarative
+    - BUG/MINOR: cfgparse-listen: do not emit extraneous line in rule order warnings
+    - CLEANUP: tree-wide: fix typos in non user-visible comments in 15 files
+    - CLEANUP: h1/htx: fix a few typos in warning, debug and trace messages
+    - BUG/MINOR: mux-h1: only check h1s if not NULL
+    - BUG/MINOR: http-fetch: fix smp_fetch_hdr_ip()'s handling of brackets for IPv6
+    - BUG/MINOR: http-fetch: make http_first_req() check for HTTP first
+    - BUG/MINOR: http-act: set-status() must check the response message, not the request
+    - BUG/MINOR: tools: fix memory leak in env_expand() error path
+    - BUG/MINOR: auth: free user groups on error paths in userlist_postinit()
+    - BUG/MINOR: uri-auth: avoid leaks on initialization error
+    - BUG/MINOR: cache: fix memory leak in parse_cache_rule error path
+    - BUG/MINOR: cfgcond: make KQUEUE check for GTUNE_USE_KQUEUE not GTUNE_USE_EPOLL
+    - BUG/MINOR: mqtt: connack parser returns MQTT_NEED_MORE_DATA on unknown property
+    - BUG/MINOR: mqtt: connect parser uses wrong bit field for TOPIC_ALIAS_MAXIMUM
+    - BUG/MINOR: mqtt: connack parser uses wrong bit for SUBSCRIPTION_IDENTIFIERS_AVAILABLE
+    - BUG/MINOR: mqtt: fix PUBLISH flags validation that want all bits to be set
+    - CLEANUP: http_htx: rename inner 'type' to 'ptype' to avoid variable shadowing
+    - CLEANUP: mux-h2: fix minor output debugging format issues
+    - CLEANUP: http-rules: fix a few '&' vs '&&' checks for clarity
+    - CLEANUP: auth: remove undeclared auth_resolve_groups() from auth.h
+    - CLEANUP: cache: remove redundant res_htx assignment in http_cache_io_handler()
+    - CLEANUP: channel: remove bogus and unused definition of channel_empty()
+    - CLEANUP: flt_http_comp: remove duplicate rate limit and CPU usage checks
+    - CLEANUP: mqtt: remove duplicate MQTT_FN_BIT_USER_PROPERTY in CONNECT fields
+    - BUG/MINOR: uri-auth: fix possible null-deref in latest fix for leaks
+    - BUG/MEDIUM: tasks: Keep the TASK_RUNNING flag until queued
+    - CLEANUP: mqtt: fix spelling of shared_subscription_available
+    - CLEANUP: regex: pre-initialize error variable in regex_comp() to calm analysis
+    - BUILD: compiler: fix redefinition of __nonstring
+    - CLEANUP: defaults: adjust MAX_THREADS multiplier number in comment
+    - CLEANUP: src/cpuset.c: fix missing return in functions returning int
+    - REGTESTS: Use ${tmpdir} instead of hardcoded /tmp/
+    - REGTESTS: Don't try to use real nameservers for testcases
+    - CLEANUP: tree-wide: fix typos in non user-visible comments in 3 more files
+    - MINOR: cli: improve forward compatibility for show fd
+    - DOC: management: document the <tgid>/<fd> form of show fd
+    - CLEANUP: tree-wide: fix more typos and outdated explanations in comments
+    - BUG/MEDIUM: dict: hold read lock while incrementing refcount in dict_insert
+    - BUG/MEDIUM: http-client: Only consume input buffer when hc one is empty
+    - BUG/MINOR: xprt_qstrm: fix conflicting prototype
+    - REORG: mux_quic: use newer qcm prefix for legacy qmux files
+    - MINOR: mux_quic: use qcm prefix for mux callbacks
+    - MINOR: mux_quic: use qcm prefix for mux functions
+    - MINOR: mux_quic: use qcm prefix for traces functions/structs
+    - MINOR: mux_quic: rename qstrm files to qmux
+    - MINOR: mux_quic: remove qstrm naming in QUIC MUX
+    - MINOR: connection: rename QMux related flags
+    - MINOR: xprt_qmux: use qmux instead of qstrm naming
+    - MINOR: trace: implement source alias
+    - MEDIUM: mux_quic: rename qmux traces to qcm
+    - MINOR: sample: add a generic reverse converter
+    - MINOR: sample: add a reverse_dom converter
+    - DOC: proxy-protocol: clarify UDP usage
+    - BUILD: 51d.c: cleanup, fix preprocessor ifdefs
+    - CLEANUP: tree-wide: fix typos in user-invisible files
+    - CLEANUP: htx: Adjust numbering of HTX blocks' types in the description
+
 2026/05/08 : 3.4-dev11
     - BUG/MEDIUM: acme: fix segfault on newOrder with empty authorizations
     - BUG/MINOR: acme: skip auth/challenge steps when newOrder returns a certificate
