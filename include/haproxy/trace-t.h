@@ -166,6 +166,7 @@ struct trace_ctx {
 struct trace_source {
 	/* source definition */
 	const struct ist name;
+	const struct ist alias;
 	const char *desc;
 	const struct trace_event *known_events;
 	struct list source_link; // element in list of known trace sources

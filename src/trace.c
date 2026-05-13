@@ -386,7 +386,7 @@ struct trace_source *trace_find_source(const char *name)
 	const struct ist iname = ist(name);
 
 	list_for_each_entry(src, &trace_sources, source_link)
-		if (isteq(src->name, iname))
+		if (isteq(src->name, iname) || isteq(src->alias, iname))
 			return src;
 	return NULL;
 }
