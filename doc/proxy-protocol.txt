@@ -1,4 +1,4 @@
-2020/03/05                                                        Willy Tarreau
+2026/04/27                                                        Willy Tarreau
                                                            HAProxy Technologies
                                The PROXY protocol
                                  Versions 1 & 2
@@ -31,6 +31,7 @@ Revision history
    2025/09/09 - added SSL-related TLVs for key exchange group and signature
                 scheme (Steven Collison)
    2026/01/15 - added SSL client certificate TLV (Simon Ser)
+   2026/04/27 - clarified UDP usage (Valaphee)
 
 1. Background
 
@@ -174,6 +175,11 @@ protocols where the receiver is expected to speak first (eg: SMTP, FTP or SSH).
 The receiver may apply a short timeout and decide to abort the connection if
 the protocol header is not seen within a few seconds (at least 3 seconds to
 cover a TCP retransmit).
+
+For UDP, the PROXY protocol header and the proxied UDP payload MUST be sent in
+the same datagram. The sender MUST NOT split the PROXY protocol header across
+multiple UDP datagrams, and the receiver MUST parse the header independently
+for each received datagram.
 
 The receiver MUST be configured to only receive the protocol described in this
 specification and MUST not try to guess whether the protocol header is present
