@@ -853,7 +853,7 @@ static void h1_set_idle_expiration(struct h1c *h1c)
 /*****************************************************************/
 /* functions below are dedicated to the mux setup and management */
 /*****************************************************************/
-/* Set EOI on stream connector in DONE state iff:
+/* Set EOI on stream connector in DONE state if:
  *  - it is a response
  *  - it is a request and the response is DONE too
  *  - it is a request but no a protocol upgrade nor a CONNECT

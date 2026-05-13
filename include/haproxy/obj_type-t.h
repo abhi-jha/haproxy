@@ -24,7 +24,7 @@
 
 /* The principle is to be able to change the type of a pointer by pointing
  * it directly to an object type. The object type indicates the format of the
- * structure holing the type, and this is used to retrieve the pointer to the
+ * structure holding the type, and this is used to retrieve the pointer to the
  * beginning of the structure. Doing so saves us from having to maintain both
  * a pointer and a type for elements such as connections which can point to
  * various types of objects.

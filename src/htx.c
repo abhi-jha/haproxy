@@ -679,7 +679,7 @@ struct htx_blk *htx_replace_blk_value(struct htx *htx, struct htx_blk *blk,
 		htx->data += delta;
 		htx->flags |= HTX_FL_FRAGMENTED;
 	}
-	else { /* Do a degrag first (it is always an expansion) */
+	else { /* Do a defrag first (it is always an expansion) */
 		struct htx_blk tmpblk;
 		struct buffer *chunk = alloc_trash_chunk();
 		void *ptr;

@@ -827,7 +827,7 @@ int tell_old_pids(int sig)
 }
 
 /*
- * remove a pid forom the olpid array and decrease nb_oldpids
+ * remove a pid from the olpid array and decrease nb_oldpids
  * return 1 pid was found otherwise return 0
  */
 
@@ -3034,7 +3034,7 @@ void run_poll_loop()
 				old_detected = stop_detected;
 
 				/*
-				 * Check if ze're the first to detect the
+				 * Check if we're the first to detect the
 				 * stop
 				 */
 				while (old_detected == 0 &&
@@ -3502,7 +3502,7 @@ int main(int argc, char **argv)
 	step_init_2(argc, argv);
 
 	RUN_INITCALLS(STG_INIT_2);
-	/* Late init step: register signals for worker and standalon modes, apply
+	/* Late init step: register signals for worker and standalone modes, apply
 	 * nofile and memory limits, apply capabilities from binary, if any.
 	 */
 	step_init_3();
@@ -3622,12 +3622,12 @@ int main(int argc, char **argv)
 
 	/* set_identity() above might have dropped LSTCHK_NETADM or/and
 	 * LSTCHK_SYSADM if it changed to a new UID while preserving enough
-	 * permissions to honnor LSTCHK_NETADM/LSTCHK_SYSADM.
+	 * permissions to honor LSTCHK_NETADM/LSTCHK_SYSADM.
 	 */
 	if ((global.last_checks & (LSTCHK_NETADM|LSTCHK_SYSADM)) && getuid()) {
 		/* If global.uid is present in config, it is already set as euid
 		 * and ruid by set_identity() just above, so it's better to
-		 * remind the user to fix uncoherent settings.
+		 * remind the user to fix incoherent settings.
 		 */
 		if (global.uid > 0) {
 			ha_alert("[%s.main()] Some configuration options require full "
