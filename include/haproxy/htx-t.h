@@ -113,11 +113,10 @@
  *     - 0000 = request  start-line
  *     - 0001 = response start-line
  *     - 0010 = header
- *     - 0011 = pseudo-header ou "special" header
- *     - 0100 = end-of-headers
- *     - 0101 = data
- *     - 0110 = trailer
- *     - 0111 = end-of-trailers
+ *     - 0011 = end-of-headers
+ *     - 0100 = data
+ *     - 0101 = trailer
+ *     - 0110 = end-of-trailers
  *       ...
  *     - 1111 = unused
  *
