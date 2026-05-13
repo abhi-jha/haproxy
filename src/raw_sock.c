@@ -365,7 +365,7 @@ static size_t raw_sock_to_buf(struct connection *conn, void *xprt_ctx, struct bu
 	if (unlikely((flags & CO_RFL_TRY_HARDER) &&
 		     !(conn->flags & CO_FL_SOCK_RD_SH) &&
 		     !count)) {
-		/* we've read exactly what was being asked for, which is loewr
+		/* we've read exactly what was being asked for, which is lower
 		 * than a full buffer, and the caller wants us to really check
 		 * if there's something after. This happens in the context of
 		 * SSL where the lib reads in tiny chunks without offering the

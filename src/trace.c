@@ -1188,7 +1188,7 @@ void trace_parse_cmds(void)
 	}
 }
 
-/* parse a "trace" statement in the "global" section, returns 1 if a message is returned, otherwise zero */
+/* parse a "trace" statement in the "global" section, returns -1 on error, zero otherwise */
 static int cfg_parse_trace(char **args, int section_type, struct proxy *curpx,
 			   const struct proxy *defpx, const char *file, int line,
 			   char **err)

@@ -1357,8 +1357,7 @@ static int debug_parse_cli_write(char **args, char *payload, struct appctx *appc
 /*
  *  debug dev stream [strm=<ptr>] [strm.f[{+-=}<flags>]] [txn.f[{+-=}<flags>]] \
  *                   [req.f[{+-=}<flags>]] [res.f[{+-=}<flags>]]               \
- *                   [sif.f[{+-=<flags>]] [sib.f[{+-=<flags>]]                 \
- *                   [sif.s[=<state>]] [sib.s[=<state>]]
+ *                   [scf.s[=<state>]] [scb.s[=<state>]]
  */
 static int debug_parse_cli_stream(char **args, char *payload, struct appctx *appctx, void *private)
 {
@@ -1628,7 +1627,7 @@ static struct task *debug_delay_inj_task(struct task *t, void *ctx, unsigned int
  */
 static int debug_parse_delay_inj(char **args, char *payload, struct appctx *appctx, void *private)
 {
-	unsigned long *tctx; // [0] = inter, [2] = count
+	unsigned long *tctx; // [0] = inter, [1] = nbwakeups
 	struct task *task;
 
 	if (!cli_has_level(appctx, ACCESS_LVL_ADMIN))

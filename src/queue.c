@@ -24,9 +24,9 @@
  *   - if p->node.node.leaf_p is NULL, the element is unlinked,
  *     otherwise it necessarily belongs to one of the other lists ; this may
  *     not be atomically checked under threads though ;
- *   - pendconn->px is never NULL if pendconn->list is not empty
- *   - pendconn->srv is never NULL if pendconn->list is in the server's queue,
- *     and is always NULL if pendconn->list is in the backend's queue or empty.
+ *   - pendconn->queue->px is never NULL if pendconn->node.node.leaf_p is not NULL
+ *   - pendconn->queue->sv is never NULL if pendconn is in the server's queue,
+ *     and is always NULL if it is in the proxy's queue or unlinked.
  *   - pendconn->target is NULL while the element is queued, and points to the
  *     assigned server when the pendconn is picked.
  *
@@ -44,7 +44,7 @@
  *   - a pendconn_add() is only performed by the stream which will own the
  *     pendconn ; the pendconn is allocated at this moment and returned ; it is
  *     added to either the server or the proxy's queue while holding this
-s *     queue's lock.
+ *     queue's lock.
  *
  *   - the pendconn is then met by a thread walking over the proxy or server's
  *     queue with the respective lock held. This lock is exclusive and the
@@ -59,7 +59,7 @@ s *     queue's lock.
  *     on the queue the pendconn is attached to.
  *
  *   - no single operation except the pendconn initialisation prior to the
- *     insertion are performed without eithre a queue lock held or the element
+ *     insertion are performed without either a queue lock held or the element
  *     being unlinked and visible exclusively to its stream.
  *
  *   - pendconn_process_next_strm() assign ->target so that the stream knows
@@ -126,7 +126,8 @@ unsigned int srv_dynamic_maxconn(const struct server *s)
  * up to the caller to atomically decrement the pending counts.
  *
  * The caller must own the lock on the server queue. The pendconn must still be
- * queued (p->node.leaf_p != NULL) and must be in a server (p->srv != NULL).
+ * queued (p->node.node.leaf_p != NULL) and must be in a server queue
+ * (p->queue->sv != NULL).
  */
 static void __pendconn_unlink_srv(struct pendconn *p)
 {
@@ -139,7 +140,8 @@ static void __pendconn_unlink_srv(struct pendconn *p)
  * up to the caller to atomically decrement the pending counts.
  *
  * The caller must own the lock on the proxy queue. The pendconn must still be
- * queued (p->node.leaf_p != NULL) and must be in the proxy (p->srv == NULL).
+ * queued (p->node.node.leaf_p != NULL) and must be in the proxy queue
+ * (p->queue->sv == NULL).
  */
 static void __pendconn_unlink_prx(struct pendconn *p)
 {
@@ -147,18 +149,18 @@ static void __pendconn_unlink_prx(struct pendconn *p)
 	eb32_delete(&p->node);
 }
 
-/* Locks the queue the pendconn element belongs to. This relies on both p->px
- * and p->srv to be properly initialized (which is always the case once the
- * element has been added).
+/* Locks the queue the pendconn element belongs to. This relies on p->queue
+ * being properly initialized (which is always the case once the element
+ * has been added).
  */
 static inline void pendconn_queue_lock(struct pendconn *p)
 {
 	HA_SPIN_LOCK(QUEUE_LOCK, &p->queue->lock);
 }
 
-/* Unlocks the queue the pendconn element belongs to. This relies on both p->px
- * and p->srv to be properly initialized (which is always the case once the
- * element has been added).
+/* Unlocks the queue the pendconn element belongs to. This relies on p->queue
+ * being properly initialized (which is always the case once the element
+ * has been added).
  */
 static inline void pendconn_queue_unlock(struct pendconn *p)
 {

@@ -983,7 +983,7 @@ void cpu_compose_clusters(void)
 		/* renumber clusters and assign unassigned ones at the same
 		 * time. For this, we'll compare pkg/die/llc with the last
 		 * CPU's and verify if we need to create a new cluster ID.
-		 * Note that some platforms don't report cache. The locao value
+		 * Note that some platforms don't report cache. The local value
 		 * is local to the pkg+node combination so that we reset it
 		 * when changing, contrary to the global one which grows.
 		 */
@@ -2402,7 +2402,7 @@ static int cpu_topo_alloc(void)
 		ha_cpu_clusters[cpu].idx = cpu;
 	}
 
-	/* pre-inizialize the configured CPU sets */
+	/* pre-initialize the configured CPU sets */
 	ha_cpuset_zero(&cpu_set_cfg.drop_cpus);
 	ha_cpuset_zero(&cpu_set_cfg.only_cpus);
 	ha_cpuset_zero(&cpu_set_cfg.drop_nodes);

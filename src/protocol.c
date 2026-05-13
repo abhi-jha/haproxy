@@ -106,7 +106,7 @@ int protocol_supports_flag(struct protocol *proto, uint flag)
 		if (!(_HA_ATOMIC_LOAD(&proto->flags) & PROTO_F_REUSEPORT_SUPPORTED))
 			return 0;
 
-		/* at least nobody said it was not supported */
+		/* TESTED is set, assume supported (live test already ran and passed) */
 		if (_HA_ATOMIC_LOAD(&proto->flags) & PROTO_F_REUSEPORT_TESTED)
 			return 1;
 
@@ -289,8 +289,7 @@ int protocol_resume_all(void)
 }
 
 /* enables all listeners of all registered protocols. This is intended to be
- * used after a fork() to enable reading on all file descriptors. Returns
- * composition of ERR_NONE.
+ * used after a fork() to enable reading on all file descriptors. Returns ERR_NONE.
  */
 int protocol_enable_all(void)
 {

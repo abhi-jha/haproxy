@@ -258,6 +258,7 @@ int init_wdt_per_thread()
  fail1:
 	per_thread_wd_ctx[tid].timer = TIMER_INVALID;
 	ha_warning("Failed to setup watchdog timer for thread %u, disabling lockup detection.\n", tid);
+	/* don't fail to start just for this */
 	return 1;
 }
 

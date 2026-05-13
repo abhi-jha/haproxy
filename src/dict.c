@@ -59,7 +59,7 @@ static void free_dict_entry(struct dict_entry *de)
 }
 
 /*
- * Simple function to lookup dictionary entries with <s> as value.
+ * Simple function to lookup dictionary entries with <s> as key.
  */
 static struct dict_entry *__dict_lookup(struct dict *d, const char *s)
 {
@@ -75,7 +75,7 @@ static struct dict_entry *__dict_lookup(struct dict *d, const char *s)
 }
 
 /*
- * Insert an entry in <d> dictionary with <s> as value. *
+ * Insert an entry in <d> dictionary with <s> as key.
  */
 struct dict_entry *dict_insert(struct dict *d, char *s)
 {
