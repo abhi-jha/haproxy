@@ -183,8 +183,10 @@ int httpclient_res_xfer(struct httpclient *hc, struct buffer *dst)
 	/* call the client once we consumed all data */
 	if (!b_data(&hc->res.buf)) {
 		b_free(&hc->res.buf);
-		if (ret && hc->appctx)
+		if (ret && hc->appctx) {
+			applet_will_consume(hc->appctx);
 			appctx_wakeup(hc->appctx);
+		}
 	}
 	return ret;
 }
@@ -776,7 +778,6 @@ void httpclient_applet_io_handler(struct appctx *appctx)
 				} else {
 					appctx->st0 = HTTPCLIENT_S_RES_BODY;
 				}
-
 				htx_to_buf(htx, inbuf);
 				break;
 
@@ -874,6 +875,10 @@ void httpclient_applet_io_handler(struct appctx *appctx)
 	}
 
 out:
+	if (appctx->st0 != HTTPCLIENT_S_RES_END && !b_is_null(&hc->res.buf)) {
+		/* Don't accept more data while the httpclient response buffer is not empty */
+		applet_wont_consume(appctx);
+	}
 	return;
 
 error:
