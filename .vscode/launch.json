@@ -9,8 +9,8 @@
       "args": ["-f", "haproxy.cfg", "-db", "-V=1"],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
-      "MIMode": "gdb",
-      "miDebuggerPath": "/usr/bin/gdb"
+      "MIMode": "lldb",
+      // "noDebug": true
     }
   ]
 }
